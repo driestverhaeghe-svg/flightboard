@@ -39,16 +39,16 @@
     <div class="actions" style="margin-top:10px"><button class="alt" id="geo">Use this device's location</button></div>
     <label for="km">Radius (km, max 460)</label>
     <input type="number" id="km" min="1" max="460">
-    <label for="proxy">Relay address (needed for flight data and airline logos)</label>
+    <label for="proxy">Relay address (needed for flight data, routes and airline logos)</label>
     <input type="text" id="proxy" placeholder="https://something.workers.dev">
     <div class="row">
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
       <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
     </div>
     <label for="color">LED colour (text)</label>
-    <select id="color"><option value="amber">Amber</option><option value="green">Green</option><option value="white">White</option><option value="cyan">Cyan</option></select>
+    <select id="color"><option value="white">White</option><option value="amber">Amber</option><option value="green">Green</option><option value="cyan">Cyan</option></select>
     <div class="check"><input type="checkbox" id="ground"><span>Hide aircraft on the ground</span></div>
-    <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flights, no internet needed)</span></div>
+    <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flight, no internet needed)</span></div>
     <div class="actions">
       <button class="main" id="save">Save</button>
       <button class="alt" id="full">Full screen</button>
@@ -60,12 +60,12 @@
 
 <script>
 (function () {
-  var W = 160, H = 80;            // logical LED grid
-  var LOGO = 24;                  // logo size in LED dots
-  var DEFAULTS = { lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'amber', ground: true, demo: false, proxy: '' };
+  var W = 192, H = 96;            // logical LED grid
+  var LOGO = 32, LX = 3, LY = 3;  // logo size and position in LED dots
+  var DEFAULTS = { v: 2, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'white', ground: true, demo: false, proxy: '' };
   var PALETTE = {
     amber: ['#ffb000', '#2a1d00'], green: ['#3dff6a', '#062010'],
-    white: ['#f2f2f2', '#1c1c1c'], cyan: ['#37e3ff', '#041e24']
+    white: ['#f4f4f4', '#1d1d1d'], cyan: ['#37e3ff', '#041e24']
   };
   // ICAO callsign prefix -> [name, IATA code]
   var AIRLINES = {
@@ -87,17 +87,17 @@
   };
 
   var S = load();
-  var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null;
+  var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null, currentProg = null;
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
-  var off = document.createElement('canvas'); off.width = W; off.height = H;
-  var octx = off.getContext('2d');
   var lcan = document.createElement('canvas'); lcan.width = LOGO; lcan.height = LOGO;
   var lctx = lcan.getContext('2d');
 
   function load() {
     var s = {}, k, saved = null;
     try { saved = JSON.parse(localStorage.getItem('flightboard') || 'null'); } catch (e) {}
+    if (saved && saved.v !== 2) saved.color = 'white';        // new look defaults to white dots
     for (k in DEFAULTS) s[k] = (saved && saved[k] !== undefined) ? saved[k] : DEFAULTS[k];
+    s.v = 2;
     return s;
   }
   function save() { try { localStorage.setItem('flightboard', JSON.stringify(S)); } catch (e) {} }
@@ -129,68 +129,131 @@
   }
 
   /* ---------- drawing ---------- */
-  function text(str, x, y, size, bold, align) {
-    octx.font = (bold ? 'bold ' : '') + size + 'px Roboto, Arial, sans-serif';
-    octx.textAlign = align || 'left';
-    octx.textBaseline = 'top';
-    octx.fillText(str, x, y);
+  var FONT_SRC = {
+    'A': '.###.|#...#|#...#|#####|#...#|#...#|#...#', 'B': '####.|#...#|#...#|####.|#...#|#...#|####.',
+    'C': '.####|#....|#....|#....|#....|#....|.####', 'D': '####.|#...#|#...#|#...#|#...#|#...#|####.',
+    'E': '#####|#....|#....|####.|#....|#....|#####', 'F': '#####|#....|#....|####.|#....|#....|#....',
+    'G': '.###.|#...#|#....|#.###|#...#|#...#|.###.', 'H': '#...#|#...#|#...#|#####|#...#|#...#|#...#',
+    'I': '.###.|..#..|..#..|..#..|..#..|..#..|.###.', 'J': '..###|...#.|...#.|...#.|...#.|#..#.|.##..',
+    'K': '#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#', 'L': '#....|#....|#....|#....|#....|#....|#####',
+    'M': '#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#', 'N': '#...#|##..#|#.#.#|#..##|#...#|#...#|#...#',
+    'O': '.###.|#...#|#...#|#...#|#...#|#...#|.###.', 'P': '####.|#...#|#...#|####.|#....|#....|#....',
+    'Q': '.###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#', 'R': '####.|#...#|#...#|####.|#.#..|#..#.|#...#',
+    'S': '.####|#....|#....|.###.|....#|....#|####.', 'T': '#####|..#..|..#..|..#..|..#..|..#..|..#..',
+    'U': '#...#|#...#|#...#|#...#|#...#|#...#|.###.', 'V': '#...#|#...#|#...#|#...#|#...#|.#.#.|..#..',
+    'W': '#...#|#...#|#...#|#.#.#|#.#.#|##.##|#...#', 'X': '#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#',
+    'Y': '#...#|#...#|.#.#.|..#..|..#..|..#..|..#..', 'Z': '#####|....#|...#.|..#..|.#...|#....|#####',
+    '0': '.###.|#...#|#..##|#.#.#|##..#|#...#|.###.', '1': '..#..|.##..|..#..|..#..|..#..|..#..|.###.',
+    '2': '.###.|#...#|....#|...#.|..#..|.#...|#####', '3': '#####|...#.|..#..|...#.|....#|#...#|.###.',
+    '4': '...#.|..##.|.#.#.|#..#.|#####|...#.|...#.', '5': '#####|#....|####.|....#|....#|#...#|.###.',
+    '6': '..##.|.#...|#....|####.|#...#|#...#|.###.', '7': '#####|....#|...#.|..#..|.#...|.#...|.#...',
+    '8': '.###.|#...#|#...#|.###.|#...#|#...#|.###.', '9': '.###.|#...#|#...#|.####|....#|...#.|.##..',
+    '.': '.....|.....|.....|.....|.....|.....|..#..', '-': '.....|.....|.....|#####|.....|.....|.....',
+    '>': '#....|.#...|..#..|...#.|..#..|.#...|#....', '/': '....#|...#.|...#.|..#..|.#...|.#...|#....',
+    ':': '.....|..#..|.....|.....|.....|..#..|.....', ',': '.....|.....|.....|.....|..#..|..#..|.#...',
+    '?': '.###.|#...#|....#|...#.|..#..|.....|..#..', ' ': '.....|.....|.....|.....|.....|.....|.....'
+  };
+  var FONT = {}, fk;
+  for (fk in FONT_SRC) { FONT[fk] = FONT_SRC[fk].split('|'); }
+  var grid = new Uint8Array(W * H);
+
+  // 5x7 dot glyphs; scale 1 = 5x7 dots, scale 2 = 10x14 dots. bold adds a dot of thickness.
+  function text(str, x, y, scale, align, bold) {
+    str = String(str).toUpperCase();
+    var adv = (bold ? 7 : 6) * scale, i, g, r, c, a, b, gx, k;
+    var wid = str.length ? (str.length - 1) * adv + (bold ? 6 : 5) * scale : 0;
+    if (align === 'right') x -= wid; else if (align === 'center') x -= Math.round(wid / 2);
+    for (i = 0; i < str.length; i++) {
+      g = FONT[str.charAt(i)] || FONT['?'];
+      gx = x + i * adv;
+      for (r = 0; r < 7; r++) for (c = 0; c < 5; c++) {
+        if (g[r].charAt(c) === '#') {
+          for (k = 0; k < (bold ? 2 : 1); k++) for (a = 0; a < scale; a++) for (b = 0; b < scale; b++) {
+            var px = gx + (c + k) * scale + a, py = y + r * scale + b;
+            if (px >= 0 && px < W && py >= 0 && py < H) grid[py * W + px] = 1;
+          }
+        }
+      }
+    }
+  }
+
+  // draw on a 14-dot-tall row: big letters if the text fits the width, otherwise small
+  function fit(str, x, y, maxW, align) {
+    str = String(str).toUpperCase();
+    if (str.length * 12 - 2 <= maxW) { text(str, x, y, 2, align); return; }
+    var max = Math.floor((maxW + 1) / 6);
+    text(str.substr(0, max), x, y + 4, 1, align);
+  }
+
+  function shortName(a) {
+    var n = (a && (a.name || a.location)) || '';
+    n = n.replace(/international/ig, 'Intl').replace(/airport|aerodrome|airfield/ig, '').replace(/\s+/g, ' ');
+    return n.replace(/^\s+|\s+$/g, '');
+  }
+
+  function progress(f, rt) {
+    if (rt.prog != null) return rt.prog;
+    if (!rt.from || !rt.to || rt.from.lat == null || rt.to.lat == null) return null;
+    var a = hav(rt.from.lat, rt.from.lon, f.lat, f.lon), b = hav(f.lat, f.lon, rt.to.lat, rt.to.lon);
+    return (a + b) > 0 ? a / (a + b) : null;
   }
 
   function compose(f) {
-    octx.clearRect(0, 0, W, H);
-    octx.fillStyle = '#fff';
-    octx.strokeStyle = '#fff';
-    octx.lineWidth = 1;
-    currentLogo = null;
+    var i;
+    for (i = 0; i < grid.length; i++) grid[i] = 0;
+    currentLogo = null; currentProg = null;
     if (!f) {
-      text('. . .', W / 2, 26, 22, true, 'center');
-      text(status || 'NO FLIGHTS IN RANGE', W / 2, 58, 9, false, 'center');
+      text('. . .', W / 2, 30, 2, 'center');
+      text(status || 'NO FLIGHTS IN RANGE', W / 2, 62, 1, 'center');
       return;
     }
     var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
     var al = AIRLINES[cs.substr(0, 3)];
-    var tx = 2;
-    if (al && al[1]) {
-      tx = LOGO + 6;
+    var hasLogo = !!(al && al[1]);
+    var tx = hasLogo ? LX + LOGO + 7 : 3;
+    var avail = W - tx - 3;
+    if (hasLogo) {
       currentLogo = getLogo(al[1]);
-      if (!currentLogo) {                       // no logo available: draw a code badge
-        octx.strokeRect(2.5, 2.5, LOGO - 1, LOGO - 1);
-        text(al[1], 2 + LOGO / 2, 8, 11, true, 'center');
-      }
+      if (!currentLogo) text(al[1], LX + LOGO / 2, LY + 9, 2, 'center');   // no logo: show airline code
     }
-    text(cs, tx, 1, 18, true, 'left');
-    if (f.type) text(f.type.toUpperCase(), W - 2, 3, 12, true, 'right');
-    if (al && al[0]) text(al[0].substr(0, 18), tx, 22, 9, false, 'left');
     var rt = routes[cs];
-    text(rt ? rt.replace('-', ' > ') : (f.reg ? f.reg.toUpperCase() : ''), 2, 38, 14, true, 'left');
-    var alt = (f.alt === 'ground') ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
-    var spd = f.gs == null ? '---' : Math.round(f.gs) + 'KT';
-    text(alt + '  ' + spd + '  ' + f.dist.toFixed(1) + 'KM', 2, 62, 11, false, 'left');
+    var hasRoute = !!(rt && rt.codes);
+
+    fit(al && al[0] ? al[0] : cs, tx, 3, avail, 'left');                  // airline name
+    fit(hasRoute ? rt.codes.replace('-', ' > ') : (al ? cs : (f.reg || '')), tx, 21, avail, 'left');   // route codes
+    if (f.type) text(f.type, tx, 39, 2, 'left');                          // aircraft type
+    if (hasRoute && al) text(cs.substr(0, 7), W - 3, 39, 2, 'right');     // callsign
+
+    if (hasRoute && rt.from && rt.to && (shortName(rt.from) || shortName(rt.to))) {
+      fit(shortName(rt.from), 3, 58, W - 6, 'left');
+      fit(shortName(rt.to), 3, 75, W - 6, 'left');
+      currentProg = progress(f, rt);
+    } else {
+      var alt = (f.alt === 'ground') ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
+      var spd = f.gs == null ? '---' : Math.round(f.gs) + 'KT';
+      fit('ALT ' + alt, 3, 58, W - 6, 'left');
+      fit(spd + '  ' + f.dist.toFixed(1) + 'KM', 3, 75, W - 6, 'left');
+    }
   }
 
   function paint() {
     var cw = canvas.width = window.innerWidth, ch = canvas.height = window.innerHeight;
     var pitch = Math.min(cw / W, ch / H);
     var ox = (cw - pitch * W) / 2, oy = (ch - pitch * H) / 2;
-    var r = pitch * 0.38;
-    var data = octx.getImageData(0, 0, W, H).data;
-    var pal = PALETTE[S.color] || PALETTE.amber;
+    var r = pitch * 0.42;
+    var pal = PALETTE[S.color] || PALETTE.white;
     var x, y;
+    function cx(gx) { return ox + (gx + .5) * pitch; }
+    function cy(gy) { return oy + (gy + .5) * pitch; }
     ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, cw, ch);
     ctx.fillStyle = pal[1]; ctx.beginPath();
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
-      if (data[(y * W + x) * 4 + 3] <= 110) {
-        ctx.moveTo(ox + (x + .5) * pitch + r, oy + (y + .5) * pitch);
-        ctx.arc(ox + (x + .5) * pitch, oy + (y + .5) * pitch, r, 0, 6.2832);
-      }
+      if (!grid[y * W + x]) { ctx.moveTo(cx(x) + r, cy(y)); ctx.arc(cx(x), cy(y), r, 0, 6.2832); }
     }
     ctx.fill();
     ctx.fillStyle = pal[0]; ctx.beginPath();
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
-      if (data[(y * W + x) * 4 + 3] > 110) {
-        ctx.moveTo(ox + (x + .5) * pitch + r, oy + (y + .5) * pitch);
-        ctx.arc(ox + (x + .5) * pitch, oy + (y + .5) * pitch, r, 0, 6.2832);
-      }
+      if (grid[y * W + x]) { ctx.moveTo(cx(x) + r, cy(y)); ctx.arc(cx(x), cy(y), r, 0, 6.2832); }
     }
     ctx.fill();
     if (currentLogo) {                           // logo dots keep their own colours
@@ -200,9 +263,14 @@
         R = currentLogo[i]; G = currentLogo[i + 1]; B = currentLogo[i + 2]; A = currentLogo[i + 3];
         if (A < 100 || (R > 235 && G > 235 && B > 235)) continue;
         ctx.fillStyle = 'rgb(' + R + ',' + G + ',' + B + ')';
-        ctx.beginPath();
-        ctx.arc(ox + (2 + lx + .5) * pitch, oy + (2 + ly + .5) * pitch, r, 0, 6.2832);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(cx(LX + lx), cy(LY + ly), r, 0, 6.2832); ctx.fill();
+      }
+    }
+    if (currentProg != null) {                   // green flight-progress bar along the bottom
+      var n = W - 6, done = Math.round(Math.max(0, Math.min(1, currentProg)) * n), k;
+      for (k = 0; k < n; k++) {
+        ctx.fillStyle = k < done ? '#3dff4a' : '#0b2a10';
+        ctx.beginPath(); ctx.arc(cx(3 + k), cy(H - 3), r * 0.9, 0, 6.2832); ctx.fill();
       }
     }
   }
@@ -211,6 +279,7 @@
     compose(flights.length ? flights[0] : null);
     paint();
   }
+  window.__fb = { grid: grid, W: W, H: H, redraw: redraw };
 
   /* ---------- data ---------- */
   function hav(a, b, c, d) {
@@ -227,11 +296,11 @@
   }
 
   function demoFlights() {
-    return [
-      { callsign: 'BAW117', type: 'A388', reg: 'G-XLEB', alt: 3400, gs: 182, dist: 2.1, lat: S.lat, lon: S.lon }
-    ];
+    return [{ callsign: 'CPA841', type: 'B77W', reg: 'B-KQA', alt: 35000, gs: 480, dist: 3.2, lat: S.lat, lon: S.lon }];
   }
-  var demoRoutes = { BAW117: 'LHR-JFK' };
+  var demoRoutes = {
+    CPA841: { codes: 'YVR-HKG', prog: 0.4, from: { name: 'Vancouver International Airport' }, to: { name: 'Hong Kong International Airport' } }
+  };
 
   function poll() {
     if (S.demo) {
@@ -286,16 +355,23 @@
     if (!f || !f.callsign) return;
     var key = f.callsign.toUpperCase();
     if (routes[key] !== undefined) return;
-    routes[key] = '';                             // avoid repeat lookups
+    routes[key] = null;                           // avoid repeat lookups
     fetch(S.proxy ? base() + '/route' : 'https://api.adsb.lol/api/0/routeset', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planes: [{ callsign: f.callsign, lat: f.lat, lng: f.lon }] })
     }).then(function (r) { return r.json(); }).then(function (j) {
-      var k;
+      var k, e, ap, a0, a1;
       if (!j || !j.length) return;
       for (k = 0; k < j.length; k++) {
-        if (j[k] && j[k].callsign && j[k]._airport_codes_iata && j[k]._airport_codes_iata !== 'unknown') {
-          routes[j[k].callsign.toUpperCase()] = j[k]._airport_codes_iata;
+        e = j[k];
+        if (e && e.callsign && e._airport_codes_iata && e._airport_codes_iata !== 'unknown') {
+          ap = e._airports || [];
+          a0 = ap.length ? ap[0] : null; a1 = ap.length ? ap[ap.length - 1] : null;
+          routes[e.callsign.toUpperCase()] = {
+            codes: e._airport_codes_iata,
+            from: a0 ? { name: a0.name || a0.location, lat: a0.lat, lon: a0.lon } : null,
+            to: a1 ? { name: a1.name || a1.location, lat: a1.lat, lon: a1.lon } : null
+          };
         }
       }
       redraw();
