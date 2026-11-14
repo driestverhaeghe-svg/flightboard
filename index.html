@@ -4,10 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Flight Board</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@700&display=swap">
 <style>
   html, body { margin: 0; height: 100%; background: #050505; overflow: hidden; font-family: Roboto, Arial, sans-serif; }
   #led { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
-  .btn { position: fixed; top: 10px; right: 10px; width: 44px; height: 44px; border-radius: 22px; border: 1px solid #333;
+  .btn { position: fixed; bottom: 10px; right: 10px; width: 44px; height: 44px; border-radius: 22px; border: 1px solid #333;
          background: rgba(20,20,20,.7); color: #888; font-size: 22px; line-height: 42px; text-align: center; cursor: pointer; z-index: 5; }
   #panel { position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 10; display: none; overflow: auto; }
   #panel .box { max-width: 460px; margin: 0 auto; padding: 24px 20px 40px; color: #ddd; }
@@ -45,7 +46,9 @@
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
       <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
     </div>
-    <label for="color">Text colour</label>
+    <label for="style">Display style</label>
+    <select id="style"><option value="flap">Split-flap board with map</option><option value="led">LED dots</option></select>
+    <label for="color">Dot colour (LED style)</label>
     <select id="color"><option value="white">White</option><option value="amber">Amber</option><option value="green">Green</option><option value="cyan">Cyan</option></select>
     <div class="check"><input type="checkbox" id="ground"><span>Hide aircraft on the ground</span></div>
     <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flight, no internet needed)</span></div>
@@ -55,7 +58,7 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:18px;font-size:12px;color:#666">Version 8</div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 10</div>
   </div>
 </div>
 
@@ -63,7 +66,7 @@
 (function () {
   var W = 128, H = 64;            // LED grid, same as the FlightWall Mini
   var LOGO = 32;                  // logo size in dots
-  var DEFAULTS = { v: 2, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'white', ground: true, demo: false, proxy: '' };
+  var DEFAULTS = { v: 2, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'white', ground: true, demo: false, proxy: '', style: 'flap' };
   var PALETTE = {
     white: ['#f4f4f4', '#161616'], amber: ['#ffb000', '#201600'],
     green: ['#3dff6a', '#07180c'], cyan: ['#37e3ff', '#05191d']
@@ -90,7 +93,8 @@
 
   var S = load();
   var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null;
-  var diag = { route: '', logo: '' };   // shown in the settings panel to help find problems
+  var diag = { route: '', logo: '' };
+  var logoImgs = {};   // shown in the settings panel to help find problems
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
   var lcan = document.createElement('canvas'); lcan.width = LOGO; lcan.height = LOGO;
   var lctx = lcan.getContext('2d');
@@ -115,6 +119,7 @@
     var im = new Image();
     im.crossOrigin = 'anonymous';
     im.onload = function () {
+      logoImgs[iata] = im;
       try {
         lctx.clearRect(0, 0, LOGO, LOGO);
         var s = Math.min(LOGO / im.width, LOGO / im.height);
@@ -233,21 +238,23 @@
     var spd = f.gs == null ? '---' : Math.round(f.gs) + 'kt';
     var hasNames = !!(rt && rt.from && rt.to);
 
-    text(fit(al ? al[0] : cs, tx), tx, 1);
-    text(fit(rt ? rt.codes.replace(/-/g, ' > ') : (al ? cs : (f.reg || '')), tx), tx, 13);
-    text(fit((f.type || '') + (hasNames && f.type ? ' ' + alt : ''), tx), tx, 25);
+    var typeReg = [f.type, f.reg].filter(function (v) { return v; }).join(' ');
+    text(fit(al ? al[0] : cs, tx), tx, 0);
+    text(fit(rt ? rt.codes.replace(/-/g, ' > ') : (al ? cs : ''), tx), tx, 10);
+    text(fit(typeReg, tx), tx, 20);
     if (hasNames) {
-      text(rt.from, 2, 37);
-      text(rt.to, 2, 49);
+      text(rt.from, 2, 33);
+      text(rt.to, 2, 43);
+      text('Alt ' + alt + ' Spd ' + spd, 2, 53);
     } else {
-      text('Alt ' + alt + ' Spd ' + spd, 2, 37);
-      text(f.dist.toFixed(1) + ' km  ' + (f.reg || ''), 2, 49);
+      text('Alt ' + alt + ' Spd ' + spd, 2, 33);
+      text(f.dist.toFixed(1) + ' km away', 2, 43);
     }
     if (rt && rt.pts) {                                          // flight progress strip
       var d1 = hav(rt.pts[0][0], rt.pts[0][1], f.lat, f.lon), d2 = hav(f.lat, f.lon, rt.pts[1][0], rt.pts[1][1]);
       var frac = d1 + d2 > 0 ? d1 / (d1 + d2) : 0;
       var lit = Math.round(Math.max(0, Math.min(1, frac)) * (W - 4)), x;
-      for (x = 0; x < lit; x++) grid[(H - 3) * W + 2 + x] = 2;
+      for (x = 0; x < lit; x++) grid[(H - 1) * W + 2 + x] = 2;
     }
   }
 
@@ -284,9 +291,314 @@
     }
   }
 
+  /* ---------- split-flap display ---------- */
+  var COLS = 26, ROWS = 6, LOGOC = 4, MAPC = 6;          // top three rows: logo | text | map
+  var TEXTC0 = LOGOC, TEXTC1 = COLS - MAPC;
+  var SEQ = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-/>:,'?";
+  var NSEQ = SEQ.length, STEP = 55;                      // ms per flap
+  var cellCur = new Uint8Array(COLS * ROWS), cellTgt = new Uint8Array(COLS * ROWS), cellStart = new Float64Array(COLS * ROWS);
+  var sprites = [], spriteKey = '', rafId = 0, lastFrame = 0, flapBusy = false;
+  var board = { iata: '', rt: null };
+  var tileCache = {}, tileCount = 0, trail = [], trailKey = '', fix = null;
+  var FLAPFONT = '"Roboto Condensed","Arial Narrow",Arial,sans-serif';
+  (function () { for (var q = 0; q < cellStart.length; q++) cellStart[q] = -1; })();
+
+  function rr(x, X, Y, w, h, r) {
+    x.beginPath(); x.moveTo(X + r, Y); x.lineTo(X + w - r, Y); x.quadraticCurveTo(X + w, Y, X + w, Y + r);
+    x.lineTo(X + w, Y + h - r); x.quadraticCurveTo(X + w, Y + h, X + w - r, Y + h); x.lineTo(X + r, Y + h);
+    x.quadraticCurveTo(X, Y + h, X, Y + h - r); x.lineTo(X, Y + r); x.quadraticCurveTo(X, Y, X + r, Y); x.closePath();
+  }
+
+  function flapGeo() {
+    var cw = window.innerWidth, ch = window.innerHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
+    var A = 0.56, m = Math.round(Math.min(cw, ch) * 0.03);
+    var w = Math.floor(Math.min((cw - 2 * m) / COLS, (ch - 2 * m - 14) / ROWS * A));
+    var h = Math.floor(w / A);
+    return { cw: cw, ch: ch, dpr: dpr, w: w, h: h, bx: Math.round((cw - w * COLS) / 2), by: Math.round((ch - (h * ROWS + 14)) / 2) };
+  }
+
+  function drawTile(x, w, h, ch, fs) {
+    var pad = Math.max(1, Math.round(w * 0.035)), gr = x.createLinearGradient(0, 0, 0, h);
+    x.fillStyle = '#050505'; x.fillRect(0, 0, w, h);
+    gr.addColorStop(0, '#242424'); gr.addColorStop(0.49, '#191919'); gr.addColorStop(0.5, '#121212'); gr.addColorStop(1, '#0c0c0c');
+    rr(x, pad, pad, w - 2 * pad, h - 2 * pad, Math.max(2, w * 0.08)); x.fillStyle = gr; x.fill();
+    if (ch !== ' ') {
+      x.fillStyle = '#f3efe4'; x.font = '700 ' + fs + 'px ' + FLAPFONT; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillText(ch, w / 2, h / 2 + fs * 0.05);
+    }
+    x.fillStyle = '#000'; x.fillRect(pad, h / 2 - 1, w - 2 * pad, 2);
+    x.fillStyle = 'rgba(255,255,255,0.07)'; x.fillRect(pad, h / 2 + 1, w - 2 * pad, 1);
+  }
+  function buildSprites(g) {
+    var i, c, x, fs = Math.round(g.h * 0.66);
+    sprites = [];
+    for (i = 0; i < NSEQ; i++) {
+      c = document.createElement('canvas'); c.width = Math.round(g.w * g.dpr); c.height = Math.round(g.h * g.dpr);
+      x = c.getContext('2d'); x.scale(g.dpr, g.dpr);
+      drawTile(x, g.w, g.h, SEQ.charAt(i), fs);
+      sprites.push(c);
+    }
+  }
+
+  function centre(s, w) { s = s.substr(0, w); return new Array(Math.floor((w - s.length) / 2) + 1).join(' ') + s; }
+
+  function boardData(f) {
+    var L = ['', '', '', '', '', ''], d = { lines: L, iata: '', rt: null };
+    if (!f) { L[4] = centre(String(status || 'No flights nearby').toUpperCase(), COLS); return d; }
+    var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
+    var rt = routes[cs]; if (!rt || !rt.codes) rt = null;
+    var al = AIRLINES[cs.substr(0, 3)] || (rt && rt.airline && rt.airline.name ? [rt.airline.name, rt.airline.iata || ''] : null);
+    var alt = f.alt === 'ground' ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
+    var spd = f.gs == null ? '---' : Math.round(f.gs) + 'KT';
+    var typeReg = [f.type, f.reg].filter(function (v) { return v; }).join(' ');
+    var info = 'ALT ' + alt + ' SPD ' + spd;
+    L[0] = clean(al ? al[0] : cs).toUpperCase();
+    L[1] = rt ? rt.codes.replace(/-/g, ' > ') : (al ? cs : '');
+    L[2] = clean(typeReg).toUpperCase();
+    if (rt && rt.from && rt.to) { L[3] = clean(rt.from).toUpperCase(); L[4] = clean(rt.to).toUpperCase(); L[5] = info; }
+    else { L[3] = info; L[4] = f.dist.toFixed(1) + ' KM AWAY'; }
+    d.iata = al ? al[1] : ''; d.rt = rt;
+    return d;
+  }
+
+  function setLines(lines, now) {
+    var r, c, i, s, idx, w, c0;
+    for (r = 0; r < ROWS; r++) {
+      c0 = r < 3 ? TEXTC0 : 0; w = r < 3 ? TEXTC1 - TEXTC0 : COLS;
+      s = String(lines[r] || '').substr(0, w);
+      for (c = 0; c < w; c++) {
+        idx = SEQ.indexOf(c < s.length ? s.charAt(c) : ' ');
+        if (idx < 0) idx = SEQ.indexOf('?');
+        i = r * COLS + c0 + c;
+        if (cellTgt[i] !== idx) {
+          cellTgt[i] = idx;
+          if (cellCur[i] !== idx && cellStart[i] < 0) cellStart[i] = now + c * 14 + r * 40 + Math.random() * 100;
+        }
+        if (cellCur[i] === idx) cellStart[i] = -1;
+      }
+    }
+  }
+
+  function flapUpdate() {
+    var d = boardData(flights.length ? flights[0] : null);
+    board = d;
+    setLines(d.lines, performance.now());
+    if (d.iata) getLogo(d.iata);
+    startLoop();
+  }
+  function startLoop() { if (!rafId && S.style !== 'led') rafId = requestAnimationFrame(frame); }
+  function frame() {
+    rafId = 0;
+    if (S.style === 'led') return;
+    var now = performance.now();
+    if (flapBusy && now - lastFrame < 30) { rafId = requestAnimationFrame(frame); return; }
+    lastFrame = now;
+    flapBusy = drawFlap(now);
+    if (flapBusy) rafId = requestAnimationFrame(frame);
+  }
+
+  /* ---------- live position and map ---------- */
+  function trackNearest() {
+    var f = flights[0];
+    if (!f) { fix = null; return; }
+    var k = (f.callsign || f.reg || f.hex || '?').toUpperCase();
+    if (k !== trailKey) { trail = []; trailKey = k; }
+    fix = { lat: f.lat, lon: f.lon, track: f.track, gs: f.gs, t: performance.now() };
+    var last = trail[trail.length - 1];
+    if (!last || last[0] !== f.lat || last[1] !== f.lon) { trail.push([f.lat, f.lon]); if (trail.length > 40) trail.shift(); }
+  }
+  // move the plane along its heading between data updates
+  function planePos(now) {
+    if (!fix) return null;
+    if (typeof fix.track !== 'number' || !fix.gs) return { lat: fix.lat, lon: fix.lon };
+    var dt = Math.min(40, Math.max(0, (now - fix.t) / 1000)), dk = fix.gs * 1.852 * dt / 3600, R = 6371, t = Math.PI / 180;
+    var la = fix.lat * t, lo = fix.lon * t, b = fix.track * t, dr = dk / R;
+    var la2 = Math.asin(Math.sin(la) * Math.cos(dr) + Math.cos(la) * Math.sin(dr) * Math.cos(b));
+    var lo2 = lo + Math.atan2(Math.sin(b) * Math.sin(dr) * Math.cos(la), Math.cos(dr) - Math.sin(la) * Math.sin(la2));
+    return { lat: la2 / t, lon: lo2 / t };
+  }
+  function near(lon, ref) { while (lon - ref > 180) lon -= 360; while (ref - lon > 180) lon += 360; return lon; }
+  function wx(lon) { return (lon + 180) / 360; }
+  function wy(lat) { lat = Math.max(-85, Math.min(85, lat)); var s = Math.sin(lat * Math.PI / 180); return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI); }
+
+  function gcPoints(a, b, n) {
+    var t = Math.PI / 180, la1 = a[0] * t, lo1 = a[1] * t, la2 = b[0] * t, lo2 = b[1] * t;
+    var d = 2 * Math.asin(Math.sqrt(Math.pow(Math.sin((la2 - la1) / 2), 2) + Math.cos(la1) * Math.cos(la2) * Math.pow(Math.sin((lo2 - lo1) / 2), 2)));
+    var out = [], i, f, A, B, x, y, z, lat, lon, prev = null;
+    if (d < 1e-6) return [a, b];
+    for (i = 0; i <= n; i++) {
+      f = i / n; A = Math.sin((1 - f) * d) / Math.sin(d); B = Math.sin(f * d) / Math.sin(d);
+      x = A * Math.cos(la1) * Math.cos(lo1) + B * Math.cos(la2) * Math.cos(lo2);
+      y = A * Math.cos(la1) * Math.sin(lo1) + B * Math.cos(la2) * Math.sin(lo2);
+      z = A * Math.sin(la1) + B * Math.sin(la2);
+      lat = Math.atan2(z, Math.sqrt(x * x + y * y)) / t; lon = Math.atan2(y, x) / t;
+      if (prev !== null) lon = near(lon, prev);
+      prev = lon; out.push([lat, lon]);
+    }
+    return out;
+  }
+
+  function getTile(z, x, y) {
+    var key = z + '/' + x + '/' + y, t = tileCache[key];
+    if (t) return t.ok ? t.img : null;
+    if (tileCount > 300) { tileCache = {}; tileCount = 0; }
+    var img = new Image(); t = tileCache[key] = { img: img, ok: false }; tileCount++;
+    img.onload = function () { t.ok = true; startLoop(); };
+    img.onerror = function () {};
+    img.src = 'https://' + 'abc'.charAt((x + y) % 3) + '.basemaps.cartocdn.com/dark_all/' + key + '.png';
+    return null;
+  }
+
+  function drawMap(X, Y, w, h, now) {
+    var rt = board.rt, pp = planePos(now), pts = [], gc = null, i, k, d, best = 1e9;
+    if (rt && rt.pts && pp) {
+      if (!rt.gc) rt.gc = gcPoints(rt.pts[0], rt.pts[1], 48);
+      gc = rt.gc; pts = gc.slice(); pts.push([pp.lat, near(pp.lon, gc[gc.length >> 1][1])]);
+    } else {
+      var dl = S.km / 111, dn = S.km / (111 * Math.max(0.2, Math.cos(S.lat * Math.PI / 180)));
+      pts = [[S.lat + dl, S.lon - dn], [S.lat - dl, S.lon + dn]];
+      if (pp) pts.push([pp.lat, near(pp.lon, S.lon)]);
+    }
+    var minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+    for (i = 0; i < pts.length; i++) {
+      d = wx(pts[i][1]); if (d < minx) minx = d; if (d > maxx) maxx = d;
+      d = wy(pts[i][0]); if (d < miny) miny = d; if (d > maxy) maxy = d;
+    }
+    var zf = Math.log(Math.min(w * 0.76 / (256 * Math.max(maxx - minx, 1e-6)), h * 0.7 / (256 * Math.max(maxy - miny, 1e-6)))) / Math.LN2;
+    zf = Math.max(1, Math.min(12, zf));
+    var sz = 256 * Math.pow(2, zf), cx = (minx + maxx) / 2 * sz, cy = (miny + maxy) / 2 * sz;
+    function P(lat, lon) { return [X + w / 2 + wx(lon) * sz - cx, Y + h / 2 + wy(lat) * sz - cy]; }
+
+    ctx.save();
+    rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6); ctx.clip();
+    ctx.fillStyle = '#0c1115'; ctx.fillRect(X, Y, w, h);
+    var zt = Math.max(0, Math.min(13, Math.floor(zf + 0.0001))), ts = 256 * Math.pow(2, zf - zt), nt = Math.pow(2, zt), drawn = 0, tx, ty, im;
+    for (ty = Math.floor((cy - h / 2) / ts); ty <= Math.floor((cy + h / 2) / ts); ty++) {
+      if (ty < 0 || ty >= nt) continue;
+      for (tx = Math.floor((cx - w / 2) / ts); tx <= Math.floor((cx + w / 2) / ts); tx++) {
+        im = getTile(zt, ((tx % nt) + nt) % nt, ty);
+        if (im) { ctx.drawImage(im, X + w / 2 + tx * ts - cx, Y + h / 2 + ty * ts - cy, ts + 0.6, ts + 0.6); drawn++; }
+      }
+    }
+    if (!drawn) {                                    // no map tiles yet: faint grid
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1; ctx.beginPath();
+      for (i = X; i < X + w; i += 24) { ctx.moveTo(i, Y); ctx.lineTo(i, Y + h); }
+      for (i = Y; i < Y + h; i += 24) { ctx.moveTo(X, i); ctx.lineTo(X + w, i); }
+      ctx.stroke();
+    }
+    var p, q, lw = Math.max(2, h * 0.011);
+    var home = P(S.lat, S.lon), fs = Math.max(8, Math.round(h * 0.075));
+    if (gc && pp) {
+      for (i = 0; i < gc.length; i++) { d = hav(gc[i][0], gc[i][1], pp.lat, pp.lon); if (d < best) { best = d; k = i; } }
+      var pl = P(pp.lat, near(pp.lon, gc[gc.length >> 1][1]));
+      ctx.lineJoin = 'round'; ctx.lineWidth = lw;
+      if (ctx.setLineDash) ctx.setLineDash([lw * 2.5, lw * 2.5]);
+      ctx.strokeStyle = 'rgba(190,205,215,0.75)'; ctx.beginPath(); ctx.moveTo(pl[0], pl[1]);
+      for (i = k + 1; i < gc.length; i++) { q = P(gc[i][0], gc[i][1]); ctx.lineTo(q[0], q[1]); }
+      ctx.stroke();
+      if (ctx.setLineDash) ctx.setLineDash([]);
+      ctx.strokeStyle = '#ffb000'; ctx.beginPath(); p = P(gc[0][0], gc[0][1]); ctx.moveTo(p[0], p[1]);
+      for (i = 1; i <= k; i++) { q = P(gc[i][0], gc[i][1]); ctx.lineTo(q[0], q[1]); }
+      ctx.lineTo(pl[0], pl[1]); ctx.stroke();
+      var ends = [[gc[0], (rt.codes || '').split('-')[0]], [gc[gc.length - 1], (rt.codes || '').split('-')[1]]], e;
+      ctx.font = '700 ' + fs + 'px ' + FLAPFONT; ctx.textBaseline = 'middle';
+      for (e = 0; e < 2; e++) {
+        q = P(ends[e][0][0], ends[e][0][1]);
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(q[0], q[1], Math.max(3, h * 0.022), 0, 6.2832); ctx.fill();
+        ctx.textAlign = q[0] < X + w / 2 ? 'left' : 'right';
+        ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(ends[e][1] || '', q[0] + (q[0] < X + w / 2 ? 7 : -7), q[1] - fs * 0.9);
+        ctx.fillStyle = '#fff'; ctx.fillText(ends[e][1] || '', q[0] + (q[0] < X + w / 2 ? 7 : -7), q[1] - fs * 0.9);
+      }
+    } else {
+      var pxkm = sz / (40075 * Math.max(0.2, Math.cos(S.lat * Math.PI / 180)));
+      ctx.strokeStyle = 'rgba(55,227,255,0.45)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(home[0], home[1], S.km * pxkm, 0, 6.2832); ctx.stroke();
+      if (trail.length > 1) {
+        ctx.strokeStyle = '#ffb000'; ctx.lineWidth = lw; ctx.beginPath();
+        for (i = 0; i < trail.length; i++) { q = P(trail[i][0], near(trail[i][1], S.lon)); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); }
+        if (pp) { q = P(pp.lat, near(pp.lon, S.lon)); ctx.lineTo(q[0], q[1]); }
+        ctx.stroke();
+      }
+    }
+    ctx.strokeStyle = '#37e3ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(home[0], home[1], Math.max(3, h * 0.02), 0, 6.2832); ctx.stroke();
+    if (pp) {                                        // plane, pointing along its heading
+      q = P(pp.lat, gc ? near(pp.lon, gc[gc.length >> 1][1]) : near(pp.lon, S.lon));
+      var s = Math.max(0.8, h / 190);
+      ctx.save(); ctx.translate(q[0], q[1]); ctx.rotate(((fix && typeof fix.track === 'number') ? fix.track : 0) * Math.PI / 180); ctx.scale(s, s);
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(2, -4); ctx.lineTo(10, 2); ctx.lineTo(10, 4); ctx.lineTo(2, 2); ctx.lineTo(2, 6);
+      ctx.lineTo(5, 9); ctx.lineTo(5, 10); ctx.lineTo(0, 8.5); ctx.lineTo(-5, 10); ctx.lineTo(-5, 9); ctx.lineTo(-2, 6); ctx.lineTo(-2, 2);
+      ctx.lineTo(-10, 4); ctx.lineTo(-10, 2); ctx.lineTo(-2, -4); ctx.closePath();
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.fill(); ctx.restore();
+    }
+    ctx.font = Math.max(7, Math.round(h * 0.04)) + 'px Arial, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(200,210,215,0.55)'; ctx.fillText('© OpenStreetMap © CARTO', X + w - 8, Y + h - 6);
+    ctx.restore();
+    rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6); ctx.strokeStyle = '#2a2f33'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  function drawLogoPanel(X, Y, w, h) {
+    ctx.save(); rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6);
+    var im = board.iata && logoImgs[board.iata];
+    if (im) {
+      ctx.fillStyle = '#e9e6dd'; ctx.fill();
+      var sc = Math.min(w * 0.72 / im.width, h * 0.72 / im.height), dw = im.width * sc, dh = im.height * sc;
+      ctx.drawImage(im, X + (w - dw) / 2, Y + (h - dh) / 2, dw, dh);
+    } else if (board.iata) {
+      ctx.fillStyle = '#e9e6dd'; ctx.fill();
+      ctx.fillStyle = '#161616'; ctx.font = '700 ' + Math.round(h * 0.32) + 'px ' + FLAPFONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(board.iata, X + w / 2, Y + h / 2);
+    } else { ctx.fillStyle = '#0e0e0e'; ctx.fill(); }
+    ctx.restore();
+  }
+
+  function drawFlap(now) {
+    var g = flapGeo(), pw = Math.round(g.cw * g.dpr), ph = Math.round(g.ch * g.dpr);
+    if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
+    var key = g.w + 'x' + g.h + '@' + g.dpr;
+    if (key !== spriteKey) { buildSprites(g); spriteKey = key; }
+    ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
+    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, g.cw, g.ch);
+    var busy = false, r, c, i, st, X, Y, t, s, cur, nxt, sw = sprites[0].width, sh = sprites[0].height / 2, hw = g.h / 2;
+    for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) {
+      if (r < 3 && (c < TEXTC0 || c >= TEXTC1)) continue;
+      i = r * COLS + c; X = g.bx + c * g.w; Y = g.by + r * g.h; cur = cellCur[i];
+      if (cur !== cellTgt[i]) {
+        st = cellStart[i];
+        if (now >= st) {
+          while (cur !== cellTgt[i] && now >= st + STEP) { cur = (cur + 1) % NSEQ; st += STEP; }
+          cellCur[i] = cur; cellStart[i] = (cur === cellTgt[i]) ? -1 : st;
+        }
+        if (cur !== cellTgt[i]) busy = true;
+      }
+      if (cur !== cellTgt[i] && now >= cellStart[i]) {           // flap in motion
+        t = (now - cellStart[i]) / STEP; nxt = (cur + 1) % NSEQ;
+        ctx.drawImage(sprites[nxt], 0, 0, sw, sh, X, Y, g.w, hw);
+        ctx.drawImage(sprites[cur], 0, sh, sw, sh, X, Y + hw, g.w, hw);
+        if (t < 0.5) {
+          s = Math.cos(t * Math.PI);
+          ctx.drawImage(sprites[cur], 0, 0, sw, sh, X, Y + hw - hw * s, g.w, hw * s);
+          ctx.fillStyle = 'rgba(0,0,0,' + (0.55 * (1 - s)) + ')'; ctx.fillRect(X, Y + hw - hw * s, g.w, hw * s);
+        } else {
+          s = -Math.cos(t * Math.PI);
+          ctx.drawImage(sprites[nxt], 0, sh, sw, sh, X, Y + hw, g.w, hw * s);
+          ctx.fillStyle = 'rgba(0,0,0,' + (0.55 * (1 - s)) + ')'; ctx.fillRect(X, Y + hw, g.w, hw * s);
+        }
+      } else ctx.drawImage(sprites[cur], X, Y, g.w, g.h);
+    }
+    drawLogoPanel(g.bx, g.by, LOGOC * g.w, 3 * g.h);
+    drawMap(g.bx + TEXTC1 * g.w, g.by, MAPC * g.w, 3 * g.h, now);
+    if (board.rt && board.rt.pts && fix) {                         // flight progress bar
+      var pp = planePos(now), d1 = hav(board.rt.pts[0][0], board.rt.pts[0][1], pp.lat, pp.lon), d2 = hav(pp.lat, pp.lon, board.rt.pts[1][0], board.rt.pts[1][1]);
+      var fr = d1 + d2 > 0 ? Math.max(0, Math.min(1, d1 / (d1 + d2))) : 0, bw = g.w * COLS, by2 = g.by + g.h * ROWS + 8;
+      ctx.fillStyle = '#0f1a12'; ctx.fillRect(g.bx, by2, bw, 6);
+      ctx.fillStyle = '#2bff4a'; ctx.fillRect(g.bx, by2, bw * fr, 6);
+    }
+    return busy;
+  }
+
   function redraw() {
-    compose(flights.length ? flights[0] : null);
-    paint();
+    if (S.style === 'led') { compose(flights.length ? flights[0] : null); paint(); }
+    else flapUpdate();
   }
 
   /* ---------- data ---------- */
@@ -297,7 +609,7 @@
   }
 
   function demoFlights() {
-    return [{ callsign: 'CPA251', type: 'B77W', reg: 'B-KQA', alt: 35000, gs: 482, dist: 2.1, lat: 60.0, lon: -100.0 }];
+    return [{ callsign: 'CPA251', type: 'B77W', reg: 'B-KQA', alt: 35000, gs: 482, track: 275, dist: 2.1, lat: 52.0, lon: -165.0 }];
   }
   var demoRoute = {
     codes: 'YVR-HKG', from: 'Vancouver Intl', to: 'Hong Kong Intl',
@@ -308,6 +620,7 @@
     if (S.demo) {
       flights = demoFlights();
       routes.CPA251 = demoRoute;
+      if (!fix) trackNearest();
       status = ''; redraw(); return;
     }
     if (!S.proxy) { status = 'Add relay address'; lastErr = 'Relay address missing. Flightradar24 data needs the relay.'; redraw(); return; }
@@ -329,6 +642,7 @@
       }
       out.sort(function (p, q) { return p.dist - q.dist; });
       flights = out.slice(0, 1);                 // nearest aircraft only
+      trackNearest();
       status = ''; lastErr = '';
       lookupRoutes();
       redraw();
@@ -402,7 +716,7 @@
   function fill() {
     $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km; $('proxy').value = S.proxy || '';
     $('minAlt').value = S.minAlt; $('maxAlt').value = S.maxAlt;
-    $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
+    $('style').value = S.style || 'flap'; $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
   }
   function msg(t) { $('msg').textContent = t; }
   $('gear').onclick = function () {
@@ -427,9 +741,9 @@
     if (!S.proxy && !$('demo').checked) { msg('Add the relay address. Flight data needs it.'); return; }
     S.minAlt = parseFloat($('minAlt').value) || 0;
     S.maxAlt = parseFloat($('maxAlt').value) || 60000;
-    S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
+    S.style = $('style').value; S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
     S.v = 2;
-    save(); flights = []; logos = {}; routes = {}; status = 'Loading...'; redraw(); poll();
+    save(); flights = []; logos = {}; logoImgs = {}; routes = {}; fix = null; trail = []; trailKey = ''; status = 'Loading...'; redraw(); poll();
     $('panel').style.display = 'none';
   };
   $('geo').onclick = function () {
@@ -456,6 +770,8 @@
   status = S.demo ? '' : 'Loading...';
   keepAwake(); redraw(); poll();
   setInterval(poll, 10000);
+  setInterval(function () { if (S.style !== 'led') startLoop(); }, 1000);   // map keeps moving between updates
+  try { if (document.fonts && document.fonts.load) document.fonts.load('700 40px "Roboto Condensed"').then(function () { spriteKey = ''; startLoop(); }); } catch (e) {}
   var first = true;
   try { first = !localStorage.getItem('flightboard'); } catch (e) {}
   if (first) { fill(); $('panel').style.display = 'block'; }
