@@ -39,13 +39,13 @@
     <div class="actions" style="margin-top:10px"><button class="alt" id="geo">Use this device's location</button></div>
     <label for="km">Radius (km, max 460)</label>
     <input type="number" id="km" min="1" max="460">
-    <label for="proxy">Relay address (optional, fixes "data error")</label>
+    <label for="proxy">Relay address (needed for flight data and airline logos)</label>
     <input type="text" id="proxy" placeholder="https://something.workers.dev">
     <div class="row">
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
       <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
     </div>
-    <label for="color">LED colour</label>
+    <label for="color">LED colour (text)</label>
     <select id="color"><option value="amber">Amber</option><option value="green">Green</option><option value="white">White</option><option value="cyan">Cyan</option></select>
     <div class="check"><input type="checkbox" id="ground"><span>Hide aircraft on the ground</span></div>
     <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flights, no internet needed)</span></div>
@@ -61,27 +61,38 @@
 <script>
 (function () {
   var W = 160, H = 80;            // logical LED grid
+  var LOGO = 24;                  // logo size in LED dots
   var DEFAULTS = { lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'amber', ground: true, demo: false, proxy: '' };
   var PALETTE = {
     amber: ['#ffb000', '#2a1d00'], green: ['#3dff6a', '#062010'],
     white: ['#f2f2f2', '#1c1c1c'], cyan: ['#37e3ff', '#041e24']
   };
+  // ICAO callsign prefix -> [name, IATA code]
   var AIRLINES = {
-    BAW: 'BRITISH AIRWAYS', EZY: 'EASYJET', RYR: 'RYANAIR', VIR: 'VIRGIN ATLANTIC', UAE: 'EMIRATES',
-    DLH: 'LUFTHANSA', AFR: 'AIR FRANCE', KLM: 'KLM', IBE: 'IBERIA', SAS: 'SCANDINAVIAN', TAP: 'TAP PORTUGAL',
-    AAL: 'AMERICAN', DAL: 'DELTA', UAL: 'UNITED', ACA: 'AIR CANADA', QTR: 'QATAR AIRWAYS', ETD: 'ETIHAD',
-    SIA: 'SINGAPORE AIR', CPA: 'CATHAY PACIFIC', QFA: 'QANTAS', THY: 'TURKISH', TUI: 'TUI', TOM: 'TUI',
-    WZZ: 'WIZZ AIR', EIN: 'AER LINGUS', SWR: 'SWISS', AUA: 'AUSTRIAN', FIN: 'FINNAIR', LOT: 'LOT POLISH',
-    JBU: 'JETBLUE', ANA: 'ALL NIPPON', JAL: 'JAPAN AIRLINES', ELY: 'EL AL', VLG: 'VUELING', NSZ: 'NORWEGIAN',
-    NAX: 'NORWEGIAN', LOG: 'LOGANAIR', EXS: 'JET2', BCS: 'EUROPEAN AIR TRANSPORT', FDX: 'FEDEX', UPS: 'UPS',
-    RRR: 'ROYAL AIR FORCE', CFE: 'BA CITYFLYER', SHT: 'BA SHUTTLE'
+    BAW: ['BRITISH AIRWAYS', 'BA'], EZY: ['EASYJET', 'U2'], EJU: ['EASYJET EUROPE', 'EC'], EZS: ['EASYJET SWITZ.', 'DS'],
+    RYR: ['RYANAIR', 'FR'], VIR: ['VIRGIN ATLANTIC', 'VS'], UAE: ['EMIRATES', 'EK'], DLH: ['LUFTHANSA', 'LH'],
+    AFR: ['AIR FRANCE', 'AF'], KLM: ['KLM', 'KL'], IBE: ['IBERIA', 'IB'], SAS: ['SCANDINAVIAN', 'SK'],
+    TAP: ['TAP PORTUGAL', 'TP'], AAL: ['AMERICAN', 'AA'], DAL: ['DELTA', 'DL'], UAL: ['UNITED', 'UA'],
+    ACA: ['AIR CANADA', 'AC'], QTR: ['QATAR AIRWAYS', 'QR'], ETD: ['ETIHAD', 'EY'], SIA: ['SINGAPORE AIR', 'SQ'],
+    CPA: ['CATHAY PACIFIC', 'CX'], QFA: ['QANTAS', 'QF'], THY: ['TURKISH', 'TK'], TUI: ['TUI', 'BY'],
+    TOM: ['TUI', 'BY'], WZZ: ['WIZZ AIR', 'W6'], EIN: ['AER LINGUS', 'EI'], SWR: ['SWISS', 'LX'],
+    AUA: ['AUSTRIAN', 'OS'], FIN: ['FINNAIR', 'AY'], LOT: ['LOT POLISH', 'LO'], JBU: ['JETBLUE', 'B6'],
+    ANA: ['ALL NIPPON', 'NH'], JAL: ['JAPAN AIRLINES', 'JL'], ELY: ['EL AL', 'LY'], VLG: ['VUELING', 'VY'],
+    NSZ: ['NORWEGIAN', 'DY'], NAX: ['NORWEGIAN', 'DY'], NOZ: ['NORWEGIAN', 'DY'], LOG: ['LOGANAIR', 'LM'],
+    EXS: ['JET2', 'LS'], FDX: ['FEDEX', 'FX'], UPS: ['UPS', '5X'], CFE: ['BA CITYFLYER', 'BA'],
+    SHT: ['BA SHUTTLE', 'BA'], SVA: ['SAUDIA', 'SV'], BEL: ['BRUSSELS AIR', 'SN'], AIC: ['AIR INDIA', 'AI'],
+    ETH: ['ETHIOPIAN', 'ET'], MSR: ['EGYPTAIR', 'MS'], CSN: ['CHINA SOUTHERN', 'CZ'], CCA: ['AIR CHINA', 'CA'],
+    KAL: ['KOREAN AIR', 'KE'], AZA: ['ITA AIRWAYS', 'AZ'], ITY: ['ITA AIRWAYS', 'AZ'], PGT: ['PEGASUS', 'PC'],
+    RRR: ['ROYAL AIR FORCE', '']
   };
 
   var S = load();
-  var flights = [], idx = 0, routes = {}, status = '', lastErr = '';
+  var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null;
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
   var off = document.createElement('canvas'); off.width = W; off.height = H;
   var octx = off.getContext('2d');
+  var lcan = document.createElement('canvas'); lcan.width = LOGO; lcan.height = LOGO;
+  var lctx = lcan.getContext('2d');
 
   function load() {
     var s = {}, k, saved = null;
@@ -90,6 +101,32 @@
     return s;
   }
   function save() { try { localStorage.setItem('flightboard', JSON.stringify(S)); } catch (e) {} }
+  function base() { return S.proxy ? S.proxy.replace(/\/+$/, '') : ''; }
+
+  /* ---------- logos ---------- */
+  // returns array of RGBA pixels (LOGO x LOGO) when ready, otherwise null
+  function getLogo(iata) {
+    var v = logos[iata];
+    if (v && v !== 'loading') return v;
+    if (v !== undefined) return null;
+    if (!base()) { logos[iata] = false; return null; }
+    logos[iata] = 'loading';
+    var im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = function () {
+      try {
+        lctx.clearRect(0, 0, LOGO, LOGO);
+        var s = Math.min(LOGO / im.width, LOGO / im.height);
+        var w = im.width * s, h = im.height * s;
+        lctx.drawImage(im, (LOGO - w) / 2, (LOGO - h) / 2, w, h);
+        logos[iata] = lctx.getImageData(0, 0, LOGO, LOGO).data;
+      } catch (e) { logos[iata] = false; }
+      redraw();
+    };
+    im.onerror = function () { logos[iata] = false; redraw(); };
+    im.src = base() + '/logo?code=' + encodeURIComponent(iata);
+    return null;
+  }
 
   /* ---------- drawing ---------- */
   function text(str, x, y, size, bold, align) {
@@ -99,20 +136,31 @@
     octx.fillText(str, x, y);
   }
 
-  function compose(f, n, total) {
+  function compose(f) {
     octx.clearRect(0, 0, W, H);
     octx.fillStyle = '#fff';
+    octx.strokeStyle = '#fff';
+    octx.lineWidth = 1;
+    currentLogo = null;
     if (!f) {
       text('. . .', W / 2, 26, 22, true, 'center');
       text(status || 'NO FLIGHTS IN RANGE', W / 2, 58, 9, false, 'center');
       return;
     }
     var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
-    text(cs, 2, 1, 20, true, 'left');
+    var al = AIRLINES[cs.substr(0, 3)];
+    var tx = 2;
+    if (al && al[1]) {
+      tx = LOGO + 6;
+      currentLogo = getLogo(al[1]);
+      if (!currentLogo) {                       // no logo available: draw a code badge
+        octx.strokeRect(2.5, 2.5, LOGO - 1, LOGO - 1);
+        text(al[1], 2 + LOGO / 2, 8, 11, true, 'center');
+      }
+    }
+    text(cs, tx, 1, 18, true, 'left');
     if (f.type) text(f.type.toUpperCase(), W - 2, 3, 12, true, 'right');
-    var airline = AIRLINES[cs.substr(0, 3)] || '';
-    if (airline) text(airline, 2, 25, 10, false, 'left');
-    if (total > 1) text((n + 1) + '/' + total, W - 2, 25, 10, false, 'right');
+    if (al && al[0]) text(al[0].substr(0, 18), tx, 22, 9, false, 'left');
     var rt = routes[cs];
     text(rt ? rt.replace('-', ' > ') : (f.reg ? f.reg.toUpperCase() : ''), 2, 38, 14, true, 'left');
     var alt = (f.alt === 'ground') ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
@@ -127,8 +175,8 @@
     var r = pitch * 0.38;
     var data = octx.getImageData(0, 0, W, H).data;
     var pal = PALETTE[S.color] || PALETTE.amber;
+    var x, y;
     ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, cw, ch);
-    var x, y, on;
     ctx.fillStyle = pal[1]; ctx.beginPath();
     for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
       if (data[(y * W + x) * 4 + 3] <= 110) {
@@ -145,11 +193,22 @@
       }
     }
     ctx.fill();
+    if (currentLogo) {                           // logo dots keep their own colours
+      var lx, ly, i, R, G, B, A;
+      for (ly = 0; ly < LOGO; ly++) for (lx = 0; lx < LOGO; lx++) {
+        i = (ly * LOGO + lx) * 4;
+        R = currentLogo[i]; G = currentLogo[i + 1]; B = currentLogo[i + 2]; A = currentLogo[i + 3];
+        if (A < 100 || (R > 235 && G > 235 && B > 235)) continue;
+        ctx.fillStyle = 'rgb(' + R + ',' + G + ',' + B + ')';
+        ctx.beginPath();
+        ctx.arc(ox + (2 + lx + .5) * pitch, oy + (2 + ly + .5) * pitch, r, 0, 6.2832);
+        ctx.fill();
+      }
+    }
   }
 
   function redraw() {
-    var f = flights.length ? flights[idx % flights.length] : null;
-    compose(f, idx % Math.max(flights.length, 1), flights.length);
+    compose(flights.length ? flights[0] : null);
     paint();
   }
 
@@ -169,13 +228,10 @@
 
   function demoFlights() {
     return [
-      { callsign: 'BAW117', type: 'A388', reg: 'G-XLEB', alt: 3400, gs: 182, dist: 2.1, lat: S.lat, lon: S.lon },
-      { callsign: 'EZY84QV', type: 'A320', reg: 'G-UZHA', alt: 5200, gs: 240, dist: 5.8, lat: S.lat, lon: S.lon },
-      { callsign: 'UAE7', type: 'B77W', reg: 'A6-ENG', alt: 9800, gs: 330, dist: 11.4, lat: S.lat, lon: S.lon },
-      { callsign: 'RYR4TM', type: 'B738', reg: 'EI-DYB', alt: 2100, gs: 156, dist: 14.9, lat: S.lat, lon: S.lon }
+      { callsign: 'BAW117', type: 'A388', reg: 'G-XLEB', alt: 3400, gs: 182, dist: 2.1, lat: S.lat, lon: S.lon }
     ];
   }
-  var demoRoutes = { BAW117: 'LHR-JFK', EZY84QV: 'LGW-EDI', UAE7: 'DXB-LHR', RYR4TM: 'STN-DUB' };
+  var demoRoutes = { BAW117: 'LHR-JFK' };
 
   function poll() {
     if (S.demo) {
@@ -190,7 +246,7 @@
       'https://api.airplanes.live/v2/point/' + S.lat + '/' + S.lon + '/' + n,
       'https://opendata.adsb.fi/api/v2/lat/' + S.lat + '/lon/' + S.lon + '/dist/' + n
     ];
-    if (S.proxy) urls = [S.proxy.replace(/\/+$/, '') + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
+    if (S.proxy) urls = [base() + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
     var errs = [];
     function attempt(i) {
       if (i >= urls.length) return Promise.reject(new Error(errs.join(' ')));
@@ -214,28 +270,26 @@
         if (accept(f)) out.push(f);
       }
       out.sort(function (p, q) { return p.dist - q.dist; });
-      flights = out.slice(0, 8);
+      flights = out.slice(0, 1);                 // nearest aircraft only
       status = '';
       lookupRoutes();
       redraw();
     }).catch(function (e) {
       status = (navigator.onLine === false) ? 'NO WIFI' : 'DATA ERROR';
-      try { document.title = 'Flight Board - ' + e.message; } catch (x) {}
       lastErr = e.message;
       if (!flights.length) redraw();
     });
   }
 
   function lookupRoutes() {
-    var need = [], i, f;
-    for (i = 0; i < flights.length; i++) {
-      f = flights[i];
-      if (f.callsign && routes[f.callsign.toUpperCase()] === undefined) need.push({ callsign: f.callsign, lat: f.lat, lng: f.lon });
-    }
-    if (!need.length) return;
-    for (i = 0; i < need.length; i++) routes[need[i].callsign.toUpperCase()] = '';   // avoid repeat lookups
-    fetch(S.proxy ? S.proxy.replace(/\/+$/, '') + '/route' : 'https://api.adsb.lol/api/0/routeset', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planes: need })
+    var f = flights[0];
+    if (!f || !f.callsign) return;
+    var key = f.callsign.toUpperCase();
+    if (routes[key] !== undefined) return;
+    routes[key] = '';                             // avoid repeat lookups
+    fetch(S.proxy ? base() + '/route' : 'https://api.adsb.lol/api/0/routeset', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planes: [{ callsign: f.callsign, lat: f.lat, lng: f.lon }] })
     }).then(function (r) { return r.json(); }).then(function (j) {
       var k;
       if (!j || !j.length) return;
@@ -268,7 +322,7 @@
     S.minAlt = parseFloat($('minAlt').value) || 0;
     S.maxAlt = parseFloat($('maxAlt').value) || 60000;
     S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
-    save(); flights = []; idx = 0; status = 'LOADING'; redraw(); poll();
+    save(); flights = []; logos = {}; status = 'LOADING'; redraw(); poll();
     $('panel').style.display = 'none';
   };
   $('geo').onclick = function () {
@@ -295,7 +349,6 @@
   status = S.demo ? '' : 'LOADING';
   keepAwake(); redraw(); poll();
   setInterval(poll, 10000);
-  setInterval(function () { if (flights.length > 1) { idx = (idx + 1) % flights.length; redraw(); } }, 6000);
   var first = true;
   try { first = !localStorage.getItem('flightboard'); } catch (e) {}
   if (first) { fill(); $('panel').style.display = 'block'; }
