@@ -39,6 +39,8 @@
     <div class="actions" style="margin-top:10px"><button class="alt" id="geo">Use this device's location</button></div>
     <label for="km">Radius (km, max 460)</label>
     <input type="number" id="km" min="1" max="460">
+    <label for="proxy">Relay address (optional, fixes "data error")</label>
+    <input type="text" id="proxy" placeholder="https://something.workers.dev">
     <div class="row">
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
       <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
@@ -59,7 +61,7 @@
 <script>
 (function () {
   var W = 160, H = 80;            // logical LED grid
-  var DEFAULTS = { lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'amber', ground: true, demo: false };
+  var DEFAULTS = { lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'amber', ground: true, demo: false, proxy: '' };
   var PALETTE = {
     amber: ['#ffb000', '#2a1d00'], green: ['#3dff6a', '#062010'],
     white: ['#f2f2f2', '#1c1c1c'], cyan: ['#37e3ff', '#041e24']
@@ -188,6 +190,7 @@
       'https://api.airplanes.live/v2/point/' + S.lat + '/' + S.lon + '/' + n,
       'https://opendata.adsb.fi/api/v2/lat/' + S.lat + '/lon/' + S.lon + '/dist/' + n
     ];
+    if (S.proxy) urls = [S.proxy.replace(/\/+$/, '') + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
     var errs = [];
     function attempt(i) {
       if (i >= urls.length) return Promise.reject(new Error(errs.join(' ')));
@@ -231,7 +234,7 @@
     }
     if (!need.length) return;
     for (i = 0; i < need.length; i++) routes[need[i].callsign.toUpperCase()] = '';   // avoid repeat lookups
-    fetch('https://api.adsb.lol/api/0/routeset', {
+    fetch(S.proxy ? S.proxy.replace(/\/+$/, '') + '/route' : 'https://api.adsb.lol/api/0/routeset', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planes: need })
     }).then(function (r) { return r.json(); }).then(function (j) {
       var k;
@@ -248,7 +251,7 @@
   /* ---------- settings UI ---------- */
   var $ = function (id) { return document.getElementById(id); };
   function fill() {
-    $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km;
+    $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km; $('proxy').value = S.proxy || '';
     $('minAlt').value = S.minAlt; $('maxAlt').value = S.maxAlt;
     $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
   }
@@ -260,6 +263,8 @@
     if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) { msg('Enter a valid latitude and longitude.'); return; }
     if (isNaN(km) || km < 1) { msg('Radius must be at least 1 km.'); return; }
     S.lat = lat; S.lon = lon; S.km = Math.min(460, km);
+    S.proxy = $('proxy').value.replace(/^\s+|\s+$/g, '');
+    if (S.proxy && S.proxy.indexOf('https://') !== 0) { msg('The relay address must start with https://'); return; }
     S.minAlt = parseFloat($('minAlt').value) || 0;
     S.maxAlt = parseFloat($('maxAlt').value) || 60000;
     S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
