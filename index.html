@@ -39,7 +39,7 @@
     <div class="actions" style="margin-top:10px"><button class="alt" id="geo">Use this device's location</button></div>
     <label for="km">Radius (km, max 460)</label>
     <input type="number" id="km" min="1" max="460">
-    <label for="proxy">Relay address (needed for flight data and airline logos)</label>
+    <label for="proxy">Relay address (required: flight data and airline logos come through it)</label>
     <input type="text" id="proxy" placeholder="https://something.workers.dev">
     <div class="row">
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
@@ -55,7 +55,7 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:18px;font-size:12px;color:#666">Version 6</div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 8</div>
   </div>
 </div>
 
@@ -310,99 +310,91 @@
       routes.CPA251 = demoRoute;
       status = ''; redraw(); return;
     }
+    if (!S.proxy) { status = 'Add relay address'; lastErr = 'Relay address missing. Flightradar24 data needs the relay.'; redraw(); return; }
     var n = Math.round(Math.min(250, Math.max(1, S.km / 1.852)));
-    var urls = [
-      'https://api.adsb.lol/v2/point/' + S.lat + '/' + S.lon + '/' + n,
-      'https://api.airplanes.live/v2/point/' + S.lat + '/' + S.lon + '/' + n,
-      'https://opendata.adsb.fi/api/v2/lat/' + S.lat + '/lon/' + S.lon + '/dist/' + n
-    ];
-    if (S.proxy) {
-      urls = [base() + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
-    }
-    var errs = [];
-    function attempt(i) {
-      if (i >= urls.length) return Promise.reject(new Error(errs.join(' ')));
-      return fetch(urls[i]).then(function (r) {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      }).catch(function (e) {
-        errs.push((i + 1) + ':' + (e && e.message ? e.message : 'blocked'));
-        return attempt(i + 1);
-      });
-    }
-    attempt(0).then(function (j) {
-      var out = [], ac = j.ac || j.aircraft || [], i, a, f;
+    fetch(base() + '/fr24?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (j) {
+      if (j && j.error) throw new Error(j.error);
+      var out = [], ac = (j && j.ac) || [], i, a, f;
       for (i = 0; i < ac.length; i++) {
         a = ac[i];
-        if (a.lat == null || a.lon == null) continue;
+        if (typeof a.lat !== 'number' || typeof a.lon !== 'number') continue;
         f = {
-          hex: a.hex, callsign: (a.flight || '').trim(), type: a.t || '', reg: a.r || '',
-          alt: a.alt_baro, gs: a.gs, lat: a.lat, lon: a.lon, dist: hav(S.lat, S.lon, a.lat, a.lon)
+          hex: a.hex, callsign: (a.flight || '').trim(), type: a.t || '', reg: a.r || '', fr24id: a.fr24id || '',
+          alt: a.alt_baro, gs: a.gs, track: a.track, lat: a.lat, lon: a.lon, dist: hav(S.lat, S.lon, a.lat, a.lon)
         };
         if (accept(f)) out.push(f);
       }
       out.sort(function (p, q) { return p.dist - q.dist; });
       flights = out.slice(0, 1);                 // nearest aircraft only
-      status = '';
+      status = ''; lastErr = '';
       lookupRoutes();
       redraw();
     }).catch(function (e) {
       status = (navigator.onLine === false) ? 'No wifi' : 'Data error';
-      lastErr = e.message;
+      lastErr = e.message + '. Check the relay address and that relay-worker.js is up to date.';
       if (!flights.length) redraw();
     });
   }
 
   function lookupRoutes() {
     var f = flights[0];
-    if (!f || !f.callsign) return;
-    var key = f.callsign.toUpperCase();
+    if (!f || !f.fr24id) return;
+    var key = (f.callsign || f.reg || f.hex || '?').toUpperCase();
     if (routes[key] !== undefined) return;
     routes[key] = '';                             // avoid repeat lookups
     diag.route = key + ': looking up route...';
-    lookupStandard(f, key);
+    fetch(base() + '/fr24detail?id=' + encodeURIComponent(f.fr24id)).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (d) {
+      var o = d && d.airport && d.airport.origin, t = d && d.airport && d.airport.destination, al = (d && d.airline) || {};
+      if (!o || !t || !o.code || !t.code) { diag.route = key + ': Flightradar24 has no route for this flight'; return; }
+      var leg = pickLeg([
+        { name: o.name, iata: o.code.iata || o.code.icao, lat: o.position && o.position.latitude, lon: o.position && o.position.longitude },
+        { name: t.name, iata: t.code.iata || t.code.icao, lat: t.position && t.position.latitude, lon: t.position && t.position.longitude }
+      ], f);
+      if (!leg) { diag.route = key + ': route ignored, plane is not on it (' + (o.code.iata || '?') + '-' + (t.code.iata || '?') + ')'; return; }
+      leg.airline = al.name ? { name: tidy(al.name), iata: (al.code && al.code.iata) || '' } : null;
+      routes[key] = leg;
+      diag.route = key + ': route found (Flightradar24)';
+      redraw();
+    }).catch(function (e) { diag.route = key + ': route lookup failed (' + e.message + '). Update the relay (relay-worker.js).'; });
   }
 
-  function lookupStandard(f, key) {
-    fetch(S.proxy ? base() + '/route' : 'https://api.adsb.lol/api/0/routeset', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ planes: [{ callsign: f.callsign, lat: f.lat, lng: f.lon }] })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      var k, e, ap, a0, a1;
-      for (k = 0; j && k < j.length; k++) {
-        e = j[k];
-        if (!e || !e.callsign || !e._airport_codes_iata || e._airport_codes_iata === 'unknown') continue;
-        ap = e._airports || e.airports || [];
-        a0 = ap[0]; a1 = ap[ap.length - 1];
-        routes[e.callsign.toUpperCase()] = {
-          codes: e._airport_codes_iata,
-          from: a0 ? tidy(a0.name || a0.location) : '',
-          to: (a1 && ap.length > 1) ? tidy(a1.name || a1.location) : '',
-          pts: (ap.length > 1 && typeof a0.lat === 'number' && typeof a1.lat === 'number') ? [[a0.lat, a0.lon], [a1.lat, a1.lon]] : null
-        };
-      }
-      if (!routes[key] || !routes[key].from) return Promise.reject(new Error('no route'));
-      diag.route = key + ': route found (adsb.lol)';
-      redraw();
-    }).catch(function () { return lookupAdsbdb(f, key); });
+  /* route helpers: only accept a route if the plane is really on it */
+  function bearing(a, b, c, d) {
+    var t = Math.PI / 180, y = Math.sin((d - b) * t) * Math.cos(c * t);
+    var x = Math.cos(a * t) * Math.sin(c * t) - Math.sin(a * t) * Math.cos(c * t) * Math.cos((d - b) * t);
+    return (Math.atan2(y, x) / t + 360) % 360;
   }
+  function angdiff(a, b) { var d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
 
-  // second source: adsbdb.com (gives airport names, positions and the airline)
-  function lookupAdsbdb(f, key) {
-    var url = S.proxy ? base() + '/callsign?c=' + encodeURIComponent(key) : 'https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(key);
-    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
-      var fr = j && j.response && j.response.flightroute;
-      if (!fr || !fr.origin || !fr.destination) { diag.route = key + ': no route in adsb.lol or adsbdb' + (routes[key] && routes[key].codes ? ' (codes only)' : ''); return; }
-      var o = fr.origin, d = fr.destination, al = fr.airline || {};
-      routes[key] = {
-        codes: (o.iata_code || o.icao_code || '?') + '-' + (d.iata_code || d.icao_code || '?'),
-        from: tidy(o.name || o.municipality), to: tidy(d.name || d.municipality),
-        pts: (typeof o.latitude === 'number' && typeof d.latitude === 'number') ? [[o.latitude, o.longitude], [d.latitude, d.longitude]] : null,
-        airline: al.name ? { name: tidy(al.name), iata: al.iata || '' } : null
-      };
-      diag.route = key + ': route found (adsbdb)';
-      redraw();
-    }).catch(function () { diag.route = key + ': route lookup failed. Update the relay (relay-worker.js).'; });
+  // aps: [{name, iata, lat, lon}, ...] in flight order. Returns the leg the plane is on, or null.
+  function pickLeg(aps, f) {
+    var i, A, B, D, det, best = null, bestDet = 1e9;
+    for (i = 0; i + 1 < aps.length; i++) {
+      A = aps[i]; B = aps[i + 1];
+      if (typeof A.lat !== 'number' || typeof B.lat !== 'number') continue;
+      D = hav(A.lat, A.lon, B.lat, B.lon);
+      det = hav(A.lat, A.lon, f.lat, f.lon) + hav(f.lat, f.lon, B.lat, B.lon) - D;
+      if (det < bestDet) { bestDet = det; best = { A: A, B: B, D: D }; }
+    }
+    if (!best) return null;
+    if (bestDet > Math.max(80, best.D * 0.12)) return null;           // plane is nowhere near this route
+    var A2 = best.A, B2 = best.B;
+    if (typeof f.track === 'number') {                                 // heading says it is flying the other way: swap
+      var toB = angdiff(f.track, bearing(f.lat, f.lon, B2.lat, B2.lon));
+      var toA = angdiff(f.track, bearing(f.lat, f.lon, A2.lat, A2.lon));
+      if (toB > 110 && toA < 70) { var tmp = A2; A2 = B2; B2 = tmp; }
+    }
+    return {
+      codes: (A2.iata || '?') + '-' + (B2.iata || '?'),
+      from: tidy(A2.name), to: tidy(B2.name),
+      pts: [[A2.lat, A2.lon], [B2.lat, B2.lon]]
+    };
   }
 
   /* ---------- settings UI ---------- */
@@ -432,6 +424,7 @@
     S.lat = lat; S.lon = lon; S.km = Math.min(460, km);
     S.proxy = $('proxy').value.replace(/^\s+|\s+$/g, '');
     if (S.proxy && S.proxy.indexOf('https://') !== 0) { msg('The relay address must start with https://'); return; }
+    if (!S.proxy && !$('demo').checked) { msg('Add the relay address. Flight data needs it.'); return; }
     S.minAlt = parseFloat($('minAlt').value) || 0;
     S.maxAlt = parseFloat($('maxAlt').value) || 60000;
     S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
