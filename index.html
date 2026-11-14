@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Flight Board</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #050505; overflow: hidden; font-family: Roboto, Arial, sans-serif; }
+  #led { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+  .btn { position: fixed; top: 10px; right: 10px; width: 44px; height: 44px; border-radius: 22px; border: 1px solid #333;
+         background: rgba(20,20,20,.7); color: #888; font-size: 22px; line-height: 42px; text-align: center; cursor: pointer; z-index: 5; }
+  #panel { position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 10; display: none; overflow: auto; }
+  #panel .box { max-width: 460px; margin: 0 auto; padding: 24px 20px 40px; color: #ddd; }
+  #panel h1 { font-size: 20px; margin: 0 0 16px; font-weight: 600; color: #fff; }
+  label { display: block; margin: 14px 0 4px; font-size: 13px; color: #9a9a9a; }
+  input[type=text], input[type=number], select { width: 100%; box-sizing: border-box; padding: 10px; font-size: 16px; background: #151515; color: #fff; border: 1px solid #3a3a3a; border-radius: 6px; }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; min-width: 0; }
+  .check { display: flex; align-items: center; gap: 10px; margin: 16px 0 0; color: #ddd; font-size: 15px; }
+  .check input { width: 20px; height: 20px; }
+  .actions { display: flex; gap: 10px; margin-top: 24px; flex-wrap: wrap; }
+  button.main, button.alt { padding: 12px 18px; font-size: 16px; border-radius: 6px; border: 1px solid #444; cursor: pointer; }
+  button.main { background: #ffb000; color: #000; border-color: #ffb000; font-weight: 600; }
+  button.alt { background: #1a1a1a; color: #ddd; }
+  #msg { margin-top: 14px; font-size: 13px; color: #8aa; min-height: 18px; }
+</style>
+</head>
+<body>
+<canvas id="led"></canvas>
+<div class="btn" id="gear" title="Settings">&#9881;</div>
+
+<div id="panel">
+  <div class="box">
+    <h1>Flight Board settings</h1>
+    <div class="row">
+      <div><label for="lat">Latitude</label><input type="text" id="lat" inputmode="decimal"></div>
+      <div><label for="lon">Longitude</label><input type="text" id="lon" inputmode="decimal"></div>
+    </div>
+    <div class="actions" style="margin-top:10px"><button class="alt" id="geo">Use this device's location</button></div>
+    <label for="km">Radius (km, max 460)</label>
+    <input type="number" id="km" min="1" max="460">
+    <div class="row">
+      <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
+      <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
+    </div>
+    <label for="color">LED colour</label>
+    <select id="color"><option value="amber">Amber</option><option value="green">Green</option><option value="white">White</option><option value="cyan">Cyan</option></select>
+    <div class="check"><input type="checkbox" id="ground"><span>Hide aircraft on the ground</span></div>
+    <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flights, no internet needed)</span></div>
+    <div class="actions">
+      <button class="main" id="save">Save</button>
+      <button class="alt" id="full">Full screen</button>
+      <button class="alt" id="close">Close</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var W = 160, H = 80;            // logical LED grid
+  var DEFAULTS = { lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'amber', ground: true, demo: false };
+  var PALETTE = {
+    amber: ['#ffb000', '#2a1d00'], green: ['#3dff6a', '#062010'],
+    white: ['#f2f2f2', '#1c1c1c'], cyan: ['#37e3ff', '#041e24']
+  };
+  var AIRLINES = {
+    BAW: 'BRITISH AIRWAYS', EZY: 'EASYJET', RYR: 'RYANAIR', VIR: 'VIRGIN ATLANTIC', UAE: 'EMIRATES',
+    DLH: 'LUFTHANSA', AFR: 'AIR FRANCE', KLM: 'KLM', IBE: 'IBERIA', SAS: 'SCANDINAVIAN', TAP: 'TAP PORTUGAL',
+    AAL: 'AMERICAN', DAL: 'DELTA', UAL: 'UNITED', ACA: 'AIR CANADA', QTR: 'QATAR AIRWAYS', ETD: 'ETIHAD',
+    SIA: 'SINGAPORE AIR', CPA: 'CATHAY PACIFIC', QFA: 'QANTAS', THY: 'TURKISH', TUI: 'TUI', TOM: 'TUI',
+    WZZ: 'WIZZ AIR', EIN: 'AER LINGUS', SWR: 'SWISS', AUA: 'AUSTRIAN', FIN: 'FINNAIR', LOT: 'LOT POLISH',
+    JBU: 'JETBLUE', ANA: 'ALL NIPPON', JAL: 'JAPAN AIRLINES', ELY: 'EL AL', VLG: 'VUELING', NSZ: 'NORWEGIAN',
+    NAX: 'NORWEGIAN', LOG: 'LOGANAIR', EXS: 'JET2', BCS: 'EUROPEAN AIR TRANSPORT', FDX: 'FEDEX', UPS: 'UPS',
+    RRR: 'ROYAL AIR FORCE', CFE: 'BA CITYFLYER', SHT: 'BA SHUTTLE'
+  };
+
+  var S = load();
+  var flights = [], idx = 0, routes = {}, status = '', lastErr = '';
+  var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
+  var off = document.createElement('canvas'); off.width = W; off.height = H;
+  var octx = off.getContext('2d');
+
+  function load() {
+    var s = {}, k, saved = null;
+    try { saved = JSON.parse(localStorage.getItem('flightboard') || 'null'); } catch (e) {}
+    for (k in DEFAULTS) s[k] = (saved && saved[k] !== undefined) ? saved[k] : DEFAULTS[k];
+    return s;
+  }
+  function save() { try { localStorage.setItem('flightboard', JSON.stringify(S)); } catch (e) {} }
+
+  /* ---------- drawing ---------- */
+  function text(str, x, y, size, bold, align) {
+    octx.font = (bold ? 'bold ' : '') + size + 'px Roboto, Arial, sans-serif';
+    octx.textAlign = align || 'left';
+    octx.textBaseline = 'top';
+    octx.fillText(str, x, y);
+  }
+
+  function compose(f, n, total) {
+    octx.clearRect(0, 0, W, H);
+    octx.fillStyle = '#fff';
+    if (!f) {
+      text('. . .', W / 2, 26, 22, true, 'center');
+      text(status || 'NO FLIGHTS IN RANGE', W / 2, 58, 9, false, 'center');
+      return;
+    }
+    var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
+    text(cs, 2, 1, 20, true, 'left');
+    if (f.type) text(f.type.toUpperCase(), W - 2, 3, 12, true, 'right');
+    var airline = AIRLINES[cs.substr(0, 3)] || '';
+    if (airline) text(airline, 2, 25, 10, false, 'left');
+    if (total > 1) text((n + 1) + '/' + total, W - 2, 25, 10, false, 'right');
+    var rt = routes[cs];
+    text(rt ? rt.replace('-', ' > ') : (f.reg ? f.reg.toUpperCase() : ''), 2, 38, 14, true, 'left');
+    var alt = (f.alt === 'ground') ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
+    var spd = f.gs == null ? '---' : Math.round(f.gs) + 'KT';
+    text(alt + '  ' + spd + '  ' + f.dist.toFixed(1) + 'KM', 2, 62, 11, false, 'left');
+  }
+
+  function paint() {
+    var cw = canvas.width = window.innerWidth, ch = canvas.height = window.innerHeight;
+    var pitch = Math.min(cw / W, ch / H);
+    var ox = (cw - pitch * W) / 2, oy = (ch - pitch * H) / 2;
+    var r = pitch * 0.38;
+    var data = octx.getImageData(0, 0, W, H).data;
+    var pal = PALETTE[S.color] || PALETTE.amber;
+    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, cw, ch);
+    var x, y, on;
+    ctx.fillStyle = pal[1]; ctx.beginPath();
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      if (data[(y * W + x) * 4 + 3] <= 110) {
+        ctx.moveTo(ox + (x + .5) * pitch + r, oy + (y + .5) * pitch);
+        ctx.arc(ox + (x + .5) * pitch, oy + (y + .5) * pitch, r, 0, 6.2832);
+      }
+    }
+    ctx.fill();
+    ctx.fillStyle = pal[0]; ctx.beginPath();
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      if (data[(y * W + x) * 4 + 3] > 110) {
+        ctx.moveTo(ox + (x + .5) * pitch + r, oy + (y + .5) * pitch);
+        ctx.arc(ox + (x + .5) * pitch, oy + (y + .5) * pitch, r, 0, 6.2832);
+      }
+    }
+    ctx.fill();
+  }
+
+  function redraw() {
+    var f = flights.length ? flights[idx % flights.length] : null;
+    compose(f, idx % Math.max(flights.length, 1), flights.length);
+    paint();
+  }
+
+  /* ---------- data ---------- */
+  function hav(a, b, c, d) {
+    var R = 6371, t = Math.PI / 180;
+    var dl = (c - a) * t, dn = (d - b) * t;
+    var x = Math.sin(dl / 2) * Math.sin(dl / 2) + Math.cos(a * t) * Math.cos(c * t) * Math.sin(dn / 2) * Math.sin(dn / 2);
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+
+  function accept(f) {
+    if (f.alt === 'ground') return !S.ground;
+    if (f.alt == null) return true;
+    return f.alt >= S.minAlt && f.alt <= S.maxAlt;
+  }
+
+  function demoFlights() {
+    return [
+      { callsign: 'BAW117', type: 'A388', reg: 'G-XLEB', alt: 3400, gs: 182, dist: 2.1, lat: S.lat, lon: S.lon },
+      { callsign: 'EZY84QV', type: 'A320', reg: 'G-UZHA', alt: 5200, gs: 240, dist: 5.8, lat: S.lat, lon: S.lon },
+      { callsign: 'UAE7', type: 'B77W', reg: 'A6-ENG', alt: 9800, gs: 330, dist: 11.4, lat: S.lat, lon: S.lon },
+      { callsign: 'RYR4TM', type: 'B738', reg: 'EI-DYB', alt: 2100, gs: 156, dist: 14.9, lat: S.lat, lon: S.lon }
+    ];
+  }
+  var demoRoutes = { BAW117: 'LHR-JFK', EZY84QV: 'LGW-EDI', UAE7: 'DXB-LHR', RYR4TM: 'STN-DUB' };
+
+  function poll() {
+    if (S.demo) {
+      flights = demoFlights();
+      var k; for (k in demoRoutes) routes[k] = demoRoutes[k];
+      status = ''; redraw(); return;
+    }
+    var nm = Math.min(250, Math.max(1, S.km / 1.852));
+    var n = Math.round(nm);
+    var urls = [
+      'https://api.adsb.lol/v2/point/' + S.lat + '/' + S.lon + '/' + n,
+      'https://api.airplanes.live/v2/point/' + S.lat + '/' + S.lon + '/' + n,
+      'https://opendata.adsb.fi/api/v2/lat/' + S.lat + '/lon/' + S.lon + '/dist/' + n
+    ];
+    var errs = [];
+    function attempt(i) {
+      if (i >= urls.length) return Promise.reject(new Error(errs.join(' ')));
+      return fetch(urls[i]).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).catch(function (e) {
+        errs.push((i + 1) + ':' + (e && e.message ? e.message : 'blocked'));
+        return attempt(i + 1);
+      });
+    }
+    attempt(0).then(function (j) {
+      var out = [], ac = j.ac || j.aircraft || [], i, a, f;
+      for (i = 0; i < ac.length; i++) {
+        a = ac[i];
+        if (a.lat == null || a.lon == null) continue;
+        f = {
+          hex: a.hex, callsign: (a.flight || '').trim(), type: a.t || '', reg: a.r || '',
+          alt: a.alt_baro, gs: a.gs, lat: a.lat, lon: a.lon, dist: hav(S.lat, S.lon, a.lat, a.lon)
+        };
+        if (accept(f)) out.push(f);
+      }
+      out.sort(function (p, q) { return p.dist - q.dist; });
+      flights = out.slice(0, 8);
+      status = '';
+      lookupRoutes();
+      redraw();
+    }).catch(function (e) {
+      status = (navigator.onLine === false) ? 'NO WIFI' : 'DATA ERROR';
+      try { document.title = 'Flight Board - ' + e.message; } catch (x) {}
+      lastErr = e.message;
+      if (!flights.length) redraw();
+    });
+  }
+
+  function lookupRoutes() {
+    var need = [], i, f;
+    for (i = 0; i < flights.length; i++) {
+      f = flights[i];
+      if (f.callsign && routes[f.callsign.toUpperCase()] === undefined) need.push({ callsign: f.callsign, lat: f.lat, lng: f.lon });
+    }
+    if (!need.length) return;
+    for (i = 0; i < need.length; i++) routes[need[i].callsign.toUpperCase()] = '';   // avoid repeat lookups
+    fetch('https://api.adsb.lol/api/0/routeset', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ planes: need })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      var k;
+      if (!j || !j.length) return;
+      for (k = 0; k < j.length; k++) {
+        if (j[k] && j[k].callsign && j[k]._airport_codes_iata && j[k]._airport_codes_iata !== 'unknown') {
+          routes[j[k].callsign.toUpperCase()] = j[k]._airport_codes_iata;
+        }
+      }
+      redraw();
+    }).catch(function () {});
+  }
+
+  /* ---------- settings UI ---------- */
+  var $ = function (id) { return document.getElementById(id); };
+  function fill() {
+    $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km;
+    $('minAlt').value = S.minAlt; $('maxAlt').value = S.maxAlt;
+    $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
+  }
+  function msg(t) { $('msg').textContent = t; }
+  $('gear').onclick = function () { fill(); msg(lastErr ? 'Last error: ' + lastErr : ''); $('panel').style.display = 'block'; };
+  $('close').onclick = function () { $('panel').style.display = 'none'; };
+  $('save').onclick = function () {
+    var lat = parseFloat($('lat').value), lon = parseFloat($('lon').value), km = parseFloat($('km').value);
+    if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) { msg('Enter a valid latitude and longitude.'); return; }
+    if (isNaN(km) || km < 1) { msg('Radius must be at least 1 km.'); return; }
+    S.lat = lat; S.lon = lon; S.km = Math.min(460, km);
+    S.minAlt = parseFloat($('minAlt').value) || 0;
+    S.maxAlt = parseFloat($('maxAlt').value) || 60000;
+    S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
+    save(); flights = []; idx = 0; status = 'LOADING'; redraw(); poll();
+    $('panel').style.display = 'none';
+  };
+  $('geo').onclick = function () {
+    if (!navigator.geolocation) { msg('Location is not available in this browser. Type the coordinates instead.'); return; }
+    msg('Finding location...');
+    navigator.geolocation.getCurrentPosition(function (p) {
+      $('lat').value = p.coords.latitude.toFixed(4); $('lon').value = p.coords.longitude.toFixed(4); msg('Location filled in. Press Save.');
+    }, function () { msg('Could not get location. Type the coordinates instead.'); }, { timeout: 10000 });
+  };
+  $('full').onclick = function () {
+    var el = document.documentElement;
+    var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (fn) { try { fn.call(el); } catch (e) {} }
+    $('panel').style.display = 'none';
+  };
+
+  /* ---------- run ---------- */
+  function keepAwake() {
+    try { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(function () {}); } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) keepAwake(); });
+  window.addEventListener('resize', redraw);
+
+  status = S.demo ? '' : 'LOADING';
+  keepAwake(); redraw(); poll();
+  setInterval(poll, 10000);
+  setInterval(function () { if (flights.length > 1) { idx = (idx + 1) % flights.length; redraw(); } }, 6000);
+  var first = true;
+  try { first = !localStorage.getItem('flightboard'); } catch (e) {}
+  if (first) { fill(); $('panel').style.display = 'block'; }
+})();
+</script>
+</body>
+</html>
