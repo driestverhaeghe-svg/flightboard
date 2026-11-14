@@ -55,6 +55,7 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 6</div>
   </div>
 </div>
 
@@ -89,6 +90,7 @@
 
   var S = load();
   var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null;
+  var diag = { route: '', logo: '' };   // shown in the settings panel to help find problems
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
   var lcan = document.createElement('canvas'); lcan.width = LOGO; lcan.height = LOGO;
   var lctx = lcan.getContext('2d');
@@ -108,7 +110,7 @@
     var v = logos[iata];
     if (v && v !== 'loading') return v;
     if (v !== undefined) return null;
-    if (!base()) { logos[iata] = false; return null; }
+    if (!base()) { logos[iata] = false; diag.logo = 'Logo: add the relay address in settings to get logos'; return null; }
     logos[iata] = 'loading';
     var im = new Image();
     im.crossOrigin = 'anonymous';
@@ -119,10 +121,11 @@
         var w = im.width * s, h = im.height * s;
         lctx.drawImage(im, (LOGO - w) / 2, (LOGO - h) / 2, w, h);
         logos[iata] = lctx.getImageData(0, 0, LOGO, LOGO).data;
-      } catch (e) { logos[iata] = false; }
+        diag.logo = 'Logo ' + iata + ': loaded';
+      } catch (e) { logos[iata] = false; diag.logo = 'Logo ' + iata + ': blocked by browser'; }
       redraw();
     };
-    im.onerror = function () { logos[iata] = false; redraw(); };
+    im.onerror = function () { logos[iata] = false; diag.logo = 'Logo ' + iata + ': not found. Update the relay (relay-worker.js) and check its address.'; redraw(); };
     im.src = base() + '/logo?code=' + encodeURIComponent(iata);
     return null;
   }
@@ -217,9 +220,9 @@
     if (!f) { text(status || 'No flights nearby', W / 2, 28, 'center'); return; }
 
     var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
-    var al = AIRLINES[cs.substr(0, 3)];
     var rt = routes[cs];
     if (!rt || !rt.codes) rt = null;
+    var al = AIRLINES[cs.substr(0, 3)] || (rt && rt.airline && rt.airline.name ? [rt.airline.name, rt.airline.iata || ''] : null);
     var tx = 2;
     if (al && al[1]) {
       tx = LOGO + 4;
@@ -313,7 +316,9 @@
       'https://api.airplanes.live/v2/point/' + S.lat + '/' + S.lon + '/' + n,
       'https://opendata.adsb.fi/api/v2/lat/' + S.lat + '/lon/' + S.lon + '/dist/' + n
     ];
-    if (S.proxy) urls = [base() + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
+    if (S.proxy) {
+      urls = [base() + '/?lat=' + S.lat + '&lon=' + S.lon + '&nm=' + n];
+    }
     var errs = [];
     function attempt(i) {
       if (i >= urls.length) return Promise.reject(new Error(errs.join(' ')));
@@ -354,13 +359,17 @@
     var key = f.callsign.toUpperCase();
     if (routes[key] !== undefined) return;
     routes[key] = '';                             // avoid repeat lookups
+    diag.route = key + ': looking up route...';
+    lookupStandard(f, key);
+  }
+
+  function lookupStandard(f, key) {
     fetch(S.proxy ? base() + '/route' : 'https://api.adsb.lol/api/0/routeset', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planes: [{ callsign: f.callsign, lat: f.lat, lng: f.lon }] })
     }).then(function (r) { return r.json(); }).then(function (j) {
       var k, e, ap, a0, a1;
-      if (!j || !j.length) return;
-      for (k = 0; k < j.length; k++) {
+      for (k = 0; j && k < j.length; k++) {
         e = j[k];
         if (!e || !e.callsign || !e._airport_codes_iata || e._airport_codes_iata === 'unknown') continue;
         ap = e._airports || e.airports || [];
@@ -372,8 +381,28 @@
           pts: (ap.length > 1 && typeof a0.lat === 'number' && typeof a1.lat === 'number') ? [[a0.lat, a0.lon], [a1.lat, a1.lon]] : null
         };
       }
+      if (!routes[key] || !routes[key].from) return Promise.reject(new Error('no route'));
+      diag.route = key + ': route found (adsb.lol)';
       redraw();
-    }).catch(function () {});
+    }).catch(function () { return lookupAdsbdb(f, key); });
+  }
+
+  // second source: adsbdb.com (gives airport names, positions and the airline)
+  function lookupAdsbdb(f, key) {
+    var url = S.proxy ? base() + '/callsign?c=' + encodeURIComponent(key) : 'https://api.adsbdb.com/v0/callsign/' + encodeURIComponent(key);
+    return fetch(url).then(function (r) { return r.json(); }).then(function (j) {
+      var fr = j && j.response && j.response.flightroute;
+      if (!fr || !fr.origin || !fr.destination) { diag.route = key + ': no route in adsb.lol or adsbdb' + (routes[key] && routes[key].codes ? ' (codes only)' : ''); return; }
+      var o = fr.origin, d = fr.destination, al = fr.airline || {};
+      routes[key] = {
+        codes: (o.iata_code || o.icao_code || '?') + '-' + (d.iata_code || d.icao_code || '?'),
+        from: tidy(o.name || o.municipality), to: tidy(d.name || d.municipality),
+        pts: (typeof o.latitude === 'number' && typeof d.latitude === 'number') ? [[o.latitude, o.longitude], [d.latitude, d.longitude]] : null,
+        airline: al.name ? { name: tidy(al.name), iata: al.iata || '' } : null
+      };
+      diag.route = key + ': route found (adsbdb)';
+      redraw();
+    }).catch(function () { diag.route = key + ': route lookup failed. Update the relay (relay-worker.js).'; });
   }
 
   /* ---------- settings UI ---------- */
@@ -384,7 +413,17 @@
     $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
   }
   function msg(t) { $('msg').textContent = t; }
-  $('gear').onclick = function () { fill(); msg(lastErr ? 'Last error: ' + lastErr : ''); $('panel').style.display = 'block'; };
+  $('gear').onclick = function () {
+    fill();
+    var t = [];
+    if (lastErr) t.push('Last error: ' + lastErr);
+    if (flights.length) t.push('Nearest: ' + (flights[0].callsign || flights[0].reg || flights[0].hex));
+    if (diag.route) t.push(diag.route);
+    if (diag.logo) t.push(diag.logo);
+    $('msg').innerHTML = '';
+    t.forEach(function (x) { var d = document.createElement('div'); d.textContent = x; $('msg').appendChild(d); });
+    $('panel').style.display = 'block';
+  };
   $('close').onclick = function () { $('panel').style.display = 'none'; };
   $('save').onclick = function () {
     var lat = parseFloat($('lat').value), lon = parseFloat($('lon').value), km = parseFloat($('km').value);
