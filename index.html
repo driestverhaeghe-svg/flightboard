@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Flight Board</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700&display=swap">
 <style>
   html, body { margin: 0; height: 100%; background: #050505; overflow: hidden; font-family: Roboto, Arial, sans-serif; }
   #led { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; }
@@ -46,10 +46,6 @@
       <div><label for="minAlt">Min altitude (ft)</label><input type="number" id="minAlt"></div>
       <div><label for="maxAlt">Max altitude (ft)</label><input type="number" id="maxAlt"></div>
     </div>
-    <label for="style">Display style</label>
-    <select id="style"><option value="flap">Split-flap board with map</option><option value="led">LED dots</option></select>
-    <label for="color">Dot colour (LED style)</label>
-    <select id="color"><option value="white">White</option><option value="amber">Amber</option><option value="green">Green</option><option value="cyan">Cyan</option></select>
     <div class="check"><input type="checkbox" id="ground"><span>Hide aircraft on the ground</span></div>
     <div class="check"><input type="checkbox" id="demo"><span>Demo mode (fake flight, no internet needed)</span></div>
     <div class="actions">
@@ -58,20 +54,13 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:18px;font-size:12px;color:#666">Version 10</div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 12</div>
   </div>
 </div>
 
 <script>
 (function () {
-  var W = 128, H = 64;            // LED grid, same as the FlightWall Mini
-  var LOGO = 32;                  // logo size in dots
-  var DEFAULTS = { v: 2, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, color: 'white', ground: true, demo: false, proxy: '', style: 'flap' };
-  var PALETTE = {
-    white: ['#f4f4f4', '#161616'], amber: ['#ffb000', '#201600'],
-    green: ['#3dff6a', '#07180c'], cyan: ['#37e3ff', '#05191d']
-  };
-  var STRIP = '#2bff4a';
+  var DEFAULTS = { v: 3, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, ground: true, demo: false, proxy: '' };
   // ICAO callsign prefix -> [name, IATA code]
   var AIRLINES = {
     BAW: ['British Airways', 'BA'], EZY: ['easyJet', 'U2'], EJU: ['easyJet Europe', 'EC'], EZS: ['easyJet Swiss', 'DS'],
@@ -92,17 +81,13 @@
   };
 
   var S = load();
-  var flights = [], routes = {}, status = '', lastErr = '', logos = {}, currentLogo = null;
-  var diag = { route: '', logo: '' };
-  var logoImgs = {};   // shown in the settings panel to help find problems
+  var flights = [], routes = {}, status = '', lastErr = '', logoImgs = {};
+  var diag = { route: '', logo: '' };   // shown in the settings panel to help find problems
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
-  var lcan = document.createElement('canvas'); lcan.width = LOGO; lcan.height = LOGO;
-  var lctx = lcan.getContext('2d');
 
   function load() {
     var s = {}, k, saved = null;
     try { saved = JSON.parse(localStorage.getItem('flightboard') || 'null'); } catch (e) {}
-    if (saved && saved.v !== 2) saved.color = 'white';      // new look defaults to white text
     for (k in DEFAULTS) s[k] = (saved && saved[k] !== undefined) ? saved[k] : DEFAULTS[k];
     return s;
   }
@@ -111,72 +96,16 @@
 
   /* ---------- logos ---------- */
   function getLogo(iata) {
-    var v = logos[iata];
-    if (v && v !== 'loading') return v;
-    if (v !== undefined) return null;
-    if (!base()) { logos[iata] = false; diag.logo = 'Logo: add the relay address in settings to get logos'; return null; }
-    logos[iata] = 'loading';
+    if (logoImgs[iata] !== undefined) return;
+    if (!base()) { logoImgs[iata] = false; diag.logo = 'Logo: add the relay address in settings to get logos'; return; }
+    logoImgs[iata] = 'loading';
     var im = new Image();
-    im.crossOrigin = 'anonymous';
-    im.onload = function () {
-      logoImgs[iata] = im;
-      try {
-        lctx.clearRect(0, 0, LOGO, LOGO);
-        var s = Math.min(LOGO / im.width, LOGO / im.height);
-        var w = im.width * s, h = im.height * s;
-        lctx.drawImage(im, (LOGO - w) / 2, (LOGO - h) / 2, w, h);
-        logos[iata] = lctx.getImageData(0, 0, LOGO, LOGO).data;
-        diag.logo = 'Logo ' + iata + ': loaded';
-      } catch (e) { logos[iata] = false; diag.logo = 'Logo ' + iata + ': blocked by browser'; }
-      redraw();
-    };
-    im.onerror = function () { logos[iata] = false; diag.logo = 'Logo ' + iata + ': not found. Update the relay (relay-worker.js) and check its address.'; redraw(); };
+    im.onload = function () { logoImgs[iata] = im; diag.logo = 'Logo ' + iata + ': loaded'; redraw(); };
+    im.onerror = function () { logoImgs[iata] = false; diag.logo = 'Logo ' + iata + ': not found. Update the relay (relay-worker.js) and check its address.'; redraw(); };
     im.src = base() + '/logo?code=' + encodeURIComponent(iata);
-    return null;
   }
 
-  /* ---------- dot-matrix font: 5 wide, caps 7 tall, descenders to 9 ---------- */
-  var FONT_SRC = {
-    'A': '.###.|#...#|#...#|#####|#...#|#...#|#...#', 'B': '####.|#...#|#...#|####.|#...#|#...#|####.',
-    'C': '.####|#....|#....|#....|#....|#....|.####', 'D': '####.|#...#|#...#|#...#|#...#|#...#|####.',
-    'E': '#####|#....|#....|####.|#....|#....|#####', 'F': '#####|#....|#....|####.|#....|#....|#....',
-    'G': '.###.|#...#|#....|#.###|#...#|#...#|.###.', 'H': '#...#|#...#|#...#|#####|#...#|#...#|#...#',
-    'I': '.###.|..#..|..#..|..#..|..#..|..#..|.###.', 'J': '..###|...#.|...#.|...#.|...#.|#..#.|.##..',
-    'K': '#...#|#..#.|#.#..|##...|#.#..|#..#.|#...#', 'L': '#....|#....|#....|#....|#....|#....|#####',
-    'M': '#...#|##.##|#.#.#|#.#.#|#...#|#...#|#...#', 'N': '#...#|##..#|#.#.#|#..##|#...#|#...#|#...#',
-    'O': '.###.|#...#|#...#|#...#|#...#|#...#|.###.', 'P': '####.|#...#|#...#|####.|#....|#....|#....',
-    'Q': '.###.|#...#|#...#|#...#|#.#.#|#..#.|.##.#', 'R': '####.|#...#|#...#|####.|#.#..|#..#.|#...#',
-    'S': '.####|#....|#....|.###.|....#|....#|####.', 'T': '#####|..#..|..#..|..#..|..#..|..#..|..#..',
-    'U': '#...#|#...#|#...#|#...#|#...#|#...#|.###.', 'V': '#...#|#...#|#...#|#...#|#...#|.#.#.|..#..',
-    'W': '#...#|#...#|#...#|#.#.#|#.#.#|##.##|#...#', 'X': '#...#|#...#|.#.#.|..#..|.#.#.|#...#|#...#',
-    'Y': '#...#|#...#|.#.#.|..#..|..#..|..#..|..#..', 'Z': '#####|....#|...#.|..#..|.#...|#....|#####',
-    'a': '.....|.....|.###.|....#|.####|#...#|.####', 'b': '#....|#....|####.|#...#|#...#|#...#|####.',
-    'c': '.....|.....|.###.|#....|#....|#...#|.###.', 'd': '....#|....#|.####|#...#|#...#|#...#|.####',
-    'e': '.....|.....|.###.|#...#|#####|#....|.###.', 'f': '..##.|.#...|####.|.#...|.#...|.#...|.#...',
-    'g': '.....|.....|.####|#...#|#...#|#...#|.####|....#|.###.', 'h': '#....|#....|####.|#...#|#...#|#...#|#...#',
-    'i': '..#..|.....|.##..|..#..|..#..|..#..|.###.', 'j': '...#.|.....|..##.|...#.|...#.|...#.|...#.|#..#.|.##..',
-    'k': '#....|#....|#..#.|#.#..|##...|#.#..|#..#.', 'l': '.##..|..#..|..#..|..#..|..#..|..#..|.###.',
-    'm': '.....|.....|##.#.|#.#.#|#.#.#|#.#.#|#.#.#', 'n': '.....|.....|####.|#...#|#...#|#...#|#...#',
-    'o': '.....|.....|.###.|#...#|#...#|#...#|.###.', 'p': '.....|.....|####.|#...#|#...#|#...#|####.|#....|#....',
-    'q': '.....|.....|.####|#...#|#...#|#...#|.####|....#|....#', 'r': '.....|.....|#.###|##...|#....|#....|#....',
-    's': '.....|.....|.####|#....|.###.|....#|####.', 't': '.#...|.#...|####.|.#...|.#...|.#..#|..##.',
-    'u': '.....|.....|#...#|#...#|#...#|#...#|.####', 'v': '.....|.....|#...#|#...#|#...#|.#.#.|..#..',
-    'w': '.....|.....|#...#|#...#|#.#.#|#.#.#|.#.#.', 'x': '.....|.....|#...#|.#.#.|..#..|.#.#.|#...#',
-    'y': '.....|.....|#...#|#...#|#...#|.####|....#|....#|.###.', 'z': '.....|.....|#####|...#.|..#..|.#...|#####',
-    '0': '.###.|#...#|#..##|#.#.#|##..#|#...#|.###.', '1': '..#..|.##..|..#..|..#..|..#..|..#..|.###.',
-    '2': '.###.|#...#|....#|...#.|..#..|.#...|#####', '3': '#####|...#.|..#..|...#.|....#|#...#|.###.',
-    '4': '...#.|..##.|.#.#.|#..#.|#####|...#.|...#.', '5': '#####|#....|####.|....#|....#|#...#|.###.',
-    '6': '..##.|.#...|#....|####.|#...#|#...#|.###.', '7': '#####|....#|...#.|..#..|.#...|.#...|.#...',
-    '8': '.###.|#...#|#...#|.###.|#...#|#...#|.###.', '9': '.###.|#...#|#...#|.####|....#|...#.|.##..',
-    '.': '.....|.....|.....|.....|.....|.....|..#..', '-': '.....|.....|.....|#####|.....|.....|.....',
-    '>': '#....|.#...|..#..|...#.|..#..|.#...|#....', '/': '....#|...#.|...#.|..#..|.#...|.#...|#....',
-    ':': '.....|..#..|.....|.....|.....|..#..|.....', ',': '.....|.....|.....|.....|..#..|..#..|.#...',
-    "'": '..#..|..#..|.....|.....|.....|.....|.....', ' ': '.....|.....|.....|.....|.....|.....|.....'
-  };
-  var FONT = {}, fk;
-  for (fk in FONT_SRC) { FONT[fk] = FONT_SRC[fk].split('|'); }
-  var grid = new Uint8Array(W * H);   // 0 off, 1 text colour, 2 green strip
-
+  /* ---------- helpers ---------- */
   function clean(str) {
     str = String(str == null ? '' : str);
     try { str = str.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) {}
@@ -185,32 +114,6 @@
   function tidy(name) {
     return clean(String(name || '').replace(/International/gi, 'Intl').replace(/Airport/gi, ''));
   }
-
-  // 6 dots per character (5 + 1 gap); text is cut to fit the screen
-  function text(str, x, y, align, val) {
-    str = clean(str);
-    var i, g, r, c, gx, px, py;
-    var maxc = Math.floor((W - 2) / 6);
-    if (str.length > maxc) str = str.substr(0, maxc);
-    var wid = str.length ? str.length * 6 - 1 : 0;
-    if (align === 'right') x -= wid; else if (align === 'center') x -= Math.round(wid / 2);
-    for (i = 0; i < str.length; i++) {
-      g = FONT[str.charAt(i)] || FONT['?'] || FONT[' '];
-      gx = x + i * 6;
-      for (r = 0; r < g.length; r++) for (c = 0; c < 5; c++) {
-        if (g[r].charAt(c) === '#') {
-          px = gx + c; py = y + r;
-          if (px >= 0 && px < W && py >= 0 && py < H) grid[py * W + px] = val || 1;
-        }
-      }
-    }
-  }
-  function fit(str, x) {                         // shorten text so it ends before the right edge
-    var n = Math.floor((W - 1 - x) / 6);
-    str = clean(str);
-    return str.length > n ? str.substr(0, n) : str;
-  }
-
   function hav(a, b, c, d) {
     var R = 6371, t = Math.PI / 180;
     var dl = (c - a) * t, dn = (d - b) * t;
@@ -218,82 +121,13 @@
     return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   }
 
-  function compose(f) {
-    var i;
-    for (i = 0; i < grid.length; i++) grid[i] = 0;
-    currentLogo = null;
-    if (!f) { text(status || 'No flights nearby', W / 2, 28, 'center'); return; }
-
-    var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
-    var rt = routes[cs];
-    if (!rt || !rt.codes) rt = null;
-    var al = AIRLINES[cs.substr(0, 3)] || (rt && rt.airline && rt.airline.name ? [rt.airline.name, rt.airline.iata || ''] : null);
-    var tx = 2;
-    if (al && al[1]) {
-      tx = LOGO + 4;
-      currentLogo = getLogo(al[1]);
-      if (!currentLogo) text(al[1], LOGO / 2, 12, 'center');     // logo not available: show airline code
-    }
-    var alt = (f.alt === 'ground') ? 'Gnd' : (f.alt == null ? '---' : Math.round(f.alt) + 'ft');
-    var spd = f.gs == null ? '---' : Math.round(f.gs) + 'kt';
-    var hasNames = !!(rt && rt.from && rt.to);
-
-    var typeReg = [f.type, f.reg].filter(function (v) { return v; }).join(' ');
-    text(fit(al ? al[0] : cs, tx), tx, 0);
-    text(fit(rt ? rt.codes.replace(/-/g, ' > ') : (al ? cs : ''), tx), tx, 10);
-    text(fit(typeReg, tx), tx, 20);
-    if (hasNames) {
-      text(rt.from, 2, 33);
-      text(rt.to, 2, 43);
-      text('Alt ' + alt + ' Spd ' + spd, 2, 53);
-    } else {
-      text('Alt ' + alt + ' Spd ' + spd, 2, 33);
-      text(f.dist.toFixed(1) + ' km away', 2, 43);
-    }
-    if (rt && rt.pts) {                                          // flight progress strip
-      var d1 = hav(rt.pts[0][0], rt.pts[0][1], f.lat, f.lon), d2 = hav(f.lat, f.lon, rt.pts[1][0], rt.pts[1][1]);
-      var frac = d1 + d2 > 0 ? d1 / (d1 + d2) : 0;
-      var lit = Math.round(Math.max(0, Math.min(1, frac)) * (W - 4)), x;
-      for (x = 0; x < lit; x++) grid[(H - 1) * W + 2 + x] = 2;
-    }
-  }
-
-  function paint() {
-    var cw = canvas.width = window.innerWidth, ch = canvas.height = window.innerHeight;
-    var pitch = Math.min(cw / W, ch / H);
-    var ox = (cw - pitch * W) / 2, oy = (ch - pitch * H) / 2;
-    var r = pitch * 0.4;
-    var pal = PALETTE[S.color] || PALETTE.white;
-    var x, y, v, lastFill = '';
-    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, cw, ch);
-    var passes = [[0, pal[1]], [1, pal[0]], [2, STRIP]], p;
-    for (p = 0; p < passes.length; p++) {
-      ctx.fillStyle = passes[p][1]; ctx.beginPath();
-      for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
-        if (grid[y * W + x] === passes[p][0]) {
-          ctx.moveTo(ox + (x + .5) * pitch + r, oy + (y + .5) * pitch);
-          ctx.arc(ox + (x + .5) * pitch, oy + (y + .5) * pitch, r, 0, 6.2832);
-        }
-      }
-      ctx.fill();
-    }
-    if (currentLogo) {                           // logo dots keep the airline's own colours
-      var lx, ly, i, R, G, B, A;
-      for (ly = 0; ly < LOGO; ly++) for (lx = 0; lx < LOGO; lx++) {
-        i = (ly * LOGO + lx) * 4;
-        R = currentLogo[i]; G = currentLogo[i + 1]; B = currentLogo[i + 2]; A = currentLogo[i + 3];
-        if (A < 100 || (R > 235 && G > 235 && B > 235)) continue;
-        ctx.fillStyle = 'rgb(' + R + ',' + G + ',' + B + ')';
-        ctx.beginPath();
-        ctx.arc(ox + (lx + .5) * pitch, oy + (ly + .5) * pitch, r, 0, 6.2832);
-        ctx.fill();
-      }
-    }
-  }
-
-  /* ---------- split-flap display ---------- */
-  var COLS = 26, ROWS = 6, LOGOC = 4, MAPC = 6;          // top three rows: logo | text | map
+  /* ---------- departures board ---------- */
+  var COLS = 26, ROWS = 6, LOGOC = 4, MAPC = 6;
   var TEXTC0 = LOGOC, TEXTC1 = COLS - MAPC;
+  // tile groups: [row, first column, last column]. Gaps between groups have no tiles.
+  var SEGS = [[0, 4, 19], [1, 4, 19], [2, 4, 19], [3, 0, 2], [3, 4, 25], [4, 0, 2], [4, 4, 25], [5, 0, 11], [5, 13, 22]];
+  var cellOn = new Uint8Array(COLS * ROWS);
+  (function () { var k, c; for (k = 0; k < SEGS.length; k++) for (c = SEGS[k][1]; c <= SEGS[k][2]; c++) cellOn[SEGS[k][0] * COLS + c] = 1; })();
   var SEQ = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-/>:,'?";
   var NSEQ = SEQ.length, STEP = 55;                      // ms per flap
   var cellCur = new Uint8Array(COLS * ROWS), cellTgt = new Uint8Array(COLS * ROWS), cellStart = new Float64Array(COLS * ROWS);
@@ -311,26 +145,31 @@
 
   function flapGeo() {
     var cw = window.innerWidth, ch = window.innerHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
-    var A = 0.56, m = Math.round(Math.min(cw, ch) * 0.03);
-    var w = Math.floor(Math.min((cw - 2 * m) / COLS, (ch - 2 * m - 14) / ROWS * A));
-    var h = Math.floor(w / A);
-    return { cw: cw, ch: ch, dpr: dpr, w: w, h: h, bx: Math.round((cw - w * COLS) / 2), by: Math.round((ch - (h * ROWS + 14)) / 2) };
+    var A = 0.58, m = Math.round(Math.min(cw, ch) * 0.035);
+    var w = Math.floor(Math.min((cw - 2 * m) / COLS, (ch - 2 * m - 20) / (ROWS + 0.7) * A));
+    var h = Math.floor(w / A), cap = Math.round(h * 0.35);
+    var bh = h * ROWS + 2 * cap + 14;
+    return { cw: cw, ch: ch, dpr: dpr, w: w, h: h, cap: cap, bx: Math.round((cw - w * COLS) / 2), by: Math.round((ch - bh) / 2), bh: bh };
   }
+  function rowY(g, r) { return g.by + (r < 3 ? g.cap + r * g.h : 2 * g.cap + r * g.h); }
 
   function drawTile(x, w, h, ch, fs) {
-    var pad = Math.max(1, Math.round(w * 0.035)), gr = x.createLinearGradient(0, 0, 0, h);
-    x.fillStyle = '#050505'; x.fillRect(0, 0, w, h);
-    gr.addColorStop(0, '#242424'); gr.addColorStop(0.49, '#191919'); gr.addColorStop(0.5, '#121212'); gr.addColorStop(1, '#0c0c0c');
-    rr(x, pad, pad, w - 2 * pad, h - 2 * pad, Math.max(2, w * 0.08)); x.fillStyle = gr; x.fill();
+    var pad = Math.max(1, Math.round(w * 0.03)), gr = x.createLinearGradient(0, 0, 0, h), rad = Math.max(2, w * 0.07);
+    x.fillStyle = '#0b0b0b'; x.fillRect(0, 0, w, h);
+    gr.addColorStop(0, '#3b3b3d'); gr.addColorStop(0.495, '#2c2c2e'); gr.addColorStop(0.505, '#232325'); gr.addColorStop(1, '#1b1b1c');
+    rr(x, pad, pad, w - 2 * pad, h - 2 * pad, rad); x.fillStyle = gr; x.fill();
+    x.strokeStyle = 'rgba(255,255,255,0.10)'; x.lineWidth = 1; rr(x, pad + 0.5, pad + 0.5, w - 2 * pad - 1, h - 2 * pad - 1, rad); x.stroke();
     if (ch !== ' ') {
-      x.fillStyle = '#f3efe4'; x.font = '700 ' + fs + 'px ' + FLAPFONT; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = '#ebebeb'; x.font = '600 ' + fs + 'px ' + FLAPFONT; x.textAlign = 'center'; x.textBaseline = 'middle';
       x.fillText(ch, w / 2, h / 2 + fs * 0.05);
     }
-    x.fillStyle = '#000'; x.fillRect(pad, h / 2 - 1, w - 2 * pad, 2);
-    x.fillStyle = 'rgba(255,255,255,0.07)'; x.fillRect(pad, h / 2 + 1, w - 2 * pad, 1);
+    x.fillStyle = '#080808'; x.fillRect(pad, h / 2 - 1.5, w - 2 * pad, 3);               // hinge gap
+    x.fillStyle = 'rgba(255,255,255,0.12)'; x.fillRect(pad, h / 2 + 1.5, w - 2 * pad, 1);
+    x.fillStyle = '#050505';                                                              // hinge pins
+    x.beginPath(); x.arc(pad + 1.5, h / 2, Math.max(1.5, w * 0.03), 0, 6.2832); x.arc(w - pad - 1.5, h / 2, Math.max(1.5, w * 0.03), 0, 6.2832); x.fill();
   }
   function buildSprites(g) {
-    var i, c, x, fs = Math.round(g.h * 0.66);
+    var i, c, x, fs = Math.round(g.h * 0.68);
     sprites = [];
     for (i = 0; i < NSEQ; i++) {
       c = document.createElement('canvas'); c.width = Math.round(g.w * g.dpr); c.height = Math.round(g.h * g.dpr);
@@ -342,34 +181,39 @@
 
   function centre(s, w) { s = s.substr(0, w); return new Array(Math.floor((w - s.length) / 2) + 1).join(' ') + s; }
 
+  // text for each tile group, in the order of SEGS
   function boardData(f) {
-    var L = ['', '', '', '', '', ''], d = { lines: L, iata: '', rt: null };
-    if (!f) { L[4] = centre(String(status || 'No flights nearby').toUpperCase(), COLS); return d; }
+    var T = ['', '', '', '', '', '', '', '', ''], d = { texts: T, iata: '', rt: null };
+    if (!f) { T[4] = centre(String(status || 'No flights nearby').toUpperCase(), 22); return d; }
     var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
     var rt = routes[cs]; if (!rt || !rt.codes) rt = null;
     var al = AIRLINES[cs.substr(0, 3)] || (rt && rt.airline && rt.airline.name ? [rt.airline.name, rt.airline.iata || ''] : null);
-    var alt = f.alt === 'ground' ? 'GND' : (f.alt == null ? '---' : Math.round(f.alt) + 'FT');
-    var spd = f.gs == null ? '---' : Math.round(f.gs) + 'KT';
+    var altT = f.alt === 'ground' ? 'ON GROUND' : (f.alt == null ? '---' : Math.round(f.alt) + ' FT');
+    var spdT = f.gs == null ? '---' : Math.round(f.gs) + ' KT';
     var typeReg = [f.type, f.reg].filter(function (v) { return v; }).join(' ');
-    var info = 'ALT ' + alt + ' SPD ' + spd;
-    L[0] = clean(al ? al[0] : cs).toUpperCase();
-    L[1] = rt ? rt.codes.replace(/-/g, ' > ') : (al ? cs : '');
-    L[2] = clean(typeReg).toUpperCase();
-    if (rt && rt.from && rt.to) { L[3] = clean(rt.from).toUpperCase(); L[4] = clean(rt.to).toUpperCase(); L[5] = info; }
-    else { L[3] = info; L[4] = f.dist.toFixed(1) + ' KM AWAY'; }
+    T[0] = clean(al ? al[0] : cs).toUpperCase();
+    T[1] = al ? cs : '';
+    T[2] = clean(typeReg).toUpperCase();
+    if (rt && rt.from && rt.to) {
+      var cd = rt.codes.split('-');
+      T[3] = cd[0] || ''; T[4] = clean(rt.from).toUpperCase();
+      T[5] = cd[1] || ''; T[6] = clean(rt.to).toUpperCase();
+      T[7] = 'ALT ' + altT.replace(' ', ''); T[8] = 'SPD ' + spdT.replace(' ', '');
+    } else {
+      T[3] = 'ALT'; T[4] = altT; T[5] = 'SPD'; T[6] = spdT; T[7] = f.dist.toFixed(1) + ' KM AWAY';
+    }
     d.iata = al ? al[1] : ''; d.rt = rt;
     return d;
   }
 
-  function setLines(lines, now) {
-    var r, c, i, s, idx, w, c0;
-    for (r = 0; r < ROWS; r++) {
-      c0 = r < 3 ? TEXTC0 : 0; w = r < 3 ? TEXTC1 - TEXTC0 : COLS;
-      s = String(lines[r] || '').substr(0, w);
-      for (c = 0; c < w; c++) {
-        idx = SEQ.indexOf(c < s.length ? s.charAt(c) : ' ');
+  function setTexts(T, now) {
+    var k, c, i, s, idx, r;
+    for (k = 0; k < SEGS.length; k++) {
+      r = SEGS[k][0]; s = String(T[k] || '');
+      for (c = SEGS[k][1]; c <= SEGS[k][2]; c++) {
+        idx = SEQ.indexOf(c - SEGS[k][1] < s.length ? s.charAt(c - SEGS[k][1]) : ' ');
         if (idx < 0) idx = SEQ.indexOf('?');
-        i = r * COLS + c0 + c;
+        i = r * COLS + c;
         if (cellTgt[i] !== idx) {
           cellTgt[i] = idx;
           if (cellCur[i] !== idx && cellStart[i] < 0) cellStart[i] = now + c * 14 + r * 40 + Math.random() * 100;
@@ -382,14 +226,13 @@
   function flapUpdate() {
     var d = boardData(flights.length ? flights[0] : null);
     board = d;
-    setLines(d.lines, performance.now());
+    setTexts(d.texts, performance.now());
     if (d.iata) getLogo(d.iata);
     startLoop();
   }
-  function startLoop() { if (!rafId && S.style !== 'led') rafId = requestAnimationFrame(frame); }
+  function startLoop() { if (!rafId) rafId = requestAnimationFrame(frame); }
   function frame() {
     rafId = 0;
-    if (S.style === 'led') return;
     var now = performance.now();
     if (flapBusy && now - lastFrame < 30) { rafId = requestAnimationFrame(frame); return; }
     lastFrame = now;
@@ -533,22 +376,29 @@
     ctx.font = Math.max(7, Math.round(h * 0.04)) + 'px Arial, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = 'rgba(200,210,215,0.55)'; ctx.fillText('© OpenStreetMap © CARTO', X + w - 8, Y + h - 6);
     ctx.restore();
-    rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6); ctx.strokeStyle = '#2a2f33'; ctx.lineWidth = 1.5; ctx.stroke();
+    rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6); ctx.strokeStyle = '#34383c'; ctx.lineWidth = 1.5; ctx.stroke();
   }
 
   function drawLogoPanel(X, Y, w, h) {
     ctx.save(); rr(ctx, X + 2, Y + 2, w - 4, h - 4, 6);
     var im = board.iata && logoImgs[board.iata];
-    if (im) {
-      ctx.fillStyle = '#e9e6dd'; ctx.fill();
+    if (im && typeof im === 'object') {
+      ctx.fillStyle = '#ececE6'; ctx.fill();
       var sc = Math.min(w * 0.72 / im.width, h * 0.72 / im.height), dw = im.width * sc, dh = im.height * sc;
       ctx.drawImage(im, X + (w - dw) / 2, Y + (h - dh) / 2, dw, dh);
     } else if (board.iata) {
-      ctx.fillStyle = '#e9e6dd'; ctx.fill();
-      ctx.fillStyle = '#161616'; ctx.font = '700 ' + Math.round(h * 0.32) + 'px ' + FLAPFONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ececE6'; ctx.fill();
+      ctx.fillStyle = '#1a1a1a'; ctx.font = '700 ' + Math.round(h * 0.32) + 'px ' + FLAPFONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(board.iata, X + w / 2, Y + h / 2);
-    } else { ctx.fillStyle = '#0e0e0e'; ctx.fill(); }
+    } else { ctx.fillStyle = '#151516'; ctx.fill(); }
     ctx.restore();
+  }
+
+  // small spaced-out column heading
+  function caption(str, X, Y, h) {
+    var fs = Math.max(9, Math.round(h * 0.5)), i, x = X;
+    ctx.font = '600 ' + fs + 'px ' + FLAPFONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#d6d6d6';
+    for (i = 0; i < str.length; i++) { ctx.fillText(str.charAt(i), x, Y + h / 2); x += ctx.measureText(str.charAt(i)).width + fs * 0.16; }
   }
 
   function drawFlap(now) {
@@ -557,11 +407,20 @@
     var key = g.w + 'x' + g.h + '@' + g.dpr;
     if (key !== spriteKey) { buildSprites(g); spriteKey = key; }
     ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
-    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, g.cw, g.ch);
+    ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, g.cw, g.ch);
+    var bw = g.w * COLS;
+    rr(ctx, g.bx - 12, g.by - 12, bw + 24, g.bh + 24, 12); ctx.fillStyle = '#141414'; ctx.fill();
+    ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2; ctx.stroke();
+    caption('AIRLINE', g.bx + TEXTC0 * g.w + 4, g.by, g.cap);
+    caption('LIVE MAP', g.bx + TEXTC1 * g.w + 4, g.by, g.cap);
+    caption('CODE', g.bx + 4, rowY(g, 3) - g.cap, g.cap);
+    caption('AIRPORT', g.bx + 4 * g.w + 4, rowY(g, 3) - g.cap, g.cap);
+
     var busy = false, r, c, i, st, X, Y, t, s, cur, nxt, sw = sprites[0].width, sh = sprites[0].height / 2, hw = g.h / 2;
     for (r = 0; r < ROWS; r++) for (c = 0; c < COLS; c++) {
-      if (r < 3 && (c < TEXTC0 || c >= TEXTC1)) continue;
-      i = r * COLS + c; X = g.bx + c * g.w; Y = g.by + r * g.h; cur = cellCur[i];
+      i = r * COLS + c;
+      if (!cellOn[i]) continue;
+      X = g.bx + c * g.w; Y = rowY(g, r); cur = cellCur[i];
       if (cur !== cellTgt[i]) {
         st = cellStart[i];
         if (now >= st) {
@@ -585,21 +444,18 @@
         }
       } else ctx.drawImage(sprites[cur], X, Y, g.w, g.h);
     }
-    drawLogoPanel(g.bx, g.by, LOGOC * g.w, 3 * g.h);
-    drawMap(g.bx + TEXTC1 * g.w, g.by, MAPC * g.w, 3 * g.h, now);
+    drawLogoPanel(g.bx, rowY(g, 0), LOGOC * g.w, 3 * g.h);
+    drawMap(g.bx + TEXTC1 * g.w, rowY(g, 0), MAPC * g.w, 3 * g.h, now);
     if (board.rt && board.rt.pts && fix) {                         // flight progress bar
       var pp = planePos(now), d1 = hav(board.rt.pts[0][0], board.rt.pts[0][1], pp.lat, pp.lon), d2 = hav(pp.lat, pp.lon, board.rt.pts[1][0], board.rt.pts[1][1]);
-      var fr = d1 + d2 > 0 ? Math.max(0, Math.min(1, d1 / (d1 + d2))) : 0, bw = g.w * COLS, by2 = g.by + g.h * ROWS + 8;
-      ctx.fillStyle = '#0f1a12'; ctx.fillRect(g.bx, by2, bw, 6);
+      var fr = d1 + d2 > 0 ? Math.max(0, Math.min(1, d1 / (d1 + d2))) : 0, by2 = g.by + g.bh - 8;
+      ctx.fillStyle = '#10190f'; ctx.fillRect(g.bx, by2, bw, 6);
       ctx.fillStyle = '#2bff4a'; ctx.fillRect(g.bx, by2, bw * fr, 6);
     }
     return busy;
   }
 
-  function redraw() {
-    if (S.style === 'led') { compose(flights.length ? flights[0] : null); paint(); }
-    else flapUpdate();
-  }
+  function redraw() { flapUpdate(); }
 
   /* ---------- data ---------- */
   function accept(f) {
@@ -716,7 +572,7 @@
   function fill() {
     $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km; $('proxy').value = S.proxy || '';
     $('minAlt').value = S.minAlt; $('maxAlt').value = S.maxAlt;
-    $('style').value = S.style || 'flap'; $('color').value = S.color; $('ground').checked = S.ground; $('demo').checked = S.demo;
+    $('ground').checked = S.ground; $('demo').checked = S.demo;
   }
   function msg(t) { $('msg').textContent = t; }
   $('gear').onclick = function () {
@@ -741,9 +597,9 @@
     if (!S.proxy && !$('demo').checked) { msg('Add the relay address. Flight data needs it.'); return; }
     S.minAlt = parseFloat($('minAlt').value) || 0;
     S.maxAlt = parseFloat($('maxAlt').value) || 60000;
-    S.style = $('style').value; S.color = $('color').value; S.ground = $('ground').checked; S.demo = $('demo').checked;
+    S.ground = $('ground').checked; S.demo = $('demo').checked;
     S.v = 2;
-    save(); flights = []; logos = {}; logoImgs = {}; routes = {}; fix = null; trail = []; trailKey = ''; status = 'Loading...'; redraw(); poll();
+    save(); flights = []; logoImgs = {}; routes = {}; fix = null; trail = []; trailKey = ''; status = 'Loading...'; redraw(); poll();
     $('panel').style.display = 'none';
   };
   $('geo').onclick = function () {
@@ -770,7 +626,7 @@
   status = S.demo ? '' : 'Loading...';
   keepAwake(); redraw(); poll();
   setInterval(poll, 10000);
-  setInterval(function () { if (S.style !== 'led') startLoop(); }, 1000);   // map keeps moving between updates
+  setInterval(startLoop, 1000);   // map keeps moving between updates
   try { if (document.fonts && document.fonts.load) document.fonts.load('700 40px "Roboto Condensed"').then(function () { spriteKey = ''; startLoop(); }); } catch (e) {}
   var first = true;
   try { first = !localStorage.getItem('flightboard'); } catch (e) {}
