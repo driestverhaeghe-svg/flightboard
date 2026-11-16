@@ -23,6 +23,13 @@
   .opt.gone { opacity: .55; }
   .none { color: #777; font-size: 14px; padding: 6px 2px; }
   #pbtn { right: 118px; display: flex; align-items: center; justify-content: center; line-height: 1; }
+  #deco { position: fixed; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 3; }
+  #tbtn { right: 172px; display: flex; align-items: center; justify-content: center; }
+  #toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: rgba(0,0,0,.85); color: #fff; padding: 10px 22px; border-radius: 22px; font-size: 18px; z-index: 6; display: none; border: 1px solid #555; }
+  .themes { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+  .sw { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #333; border-radius: 8px; background: #111; color: #ddd; font-size: 15px; cursor: pointer; }
+  .sw.cur { border-color: #ffb000; color: #fff; }
+  .sw i { display: inline-block; width: 26px; height: 18px; border-radius: 4px; border: 1px solid rgba(255,255,255,.25); }
   #ppanel { position: fixed; inset: 0; background: rgba(0,0,0,.94); z-index: 10; display: none; overflow: auto; }
   #ppanel .box { max-width: 560px; margin: 0 auto; padding: 24px 20px 40px; color: #ddd; }
   #ppanel h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; color: #fff; }
@@ -55,7 +62,10 @@
 </head>
 <body>
 <canvas id="led"></canvas>
+<canvas id="deco"></canvas>
+<div id="toast"></div>
 <div class="btn" id="fbtn" title="Filter flights"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 4h18l-7 8.5V19l-4 2v-8.5z"/></svg></div>
+<div class="btn" id="tbtn" title="Theme"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 2-.8 2-1.8 0-1-.8-1.5-.8-2.4 0-.9.7-1.5 1.7-1.5H17a4 4 0 0 0 4-4C21 6.4 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.2"/><circle cx="10.5" cy="7.5" r="1.2"/><circle cx="15" cy="7.5" r="1.2"/></svg></div>
 <div class="btn" id="pbtn" title="Locations"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg></div>
 <div class="btn" id="gear" title="Settings">&#9881;</div>
 
@@ -106,6 +116,8 @@
 <div id="panel">
   <div class="box">
     <h1>Flight Board settings</h1>
+    <label>Theme</label>
+    <div class="themes" id="themes"></div>
     <div class="row">
       <div><label for="lat">Latitude</label><input type="text" id="lat" inputmode="decimal"></div>
       <div><label for="lon">Longitude</label><input type="text" id="lon" inputmode="decimal"></div>
@@ -127,13 +139,13 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:18px;font-size:12px;color:#666">Version 15</div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 16</div>
   </div>
 </div>
 
 <script>
 (function () {
-  var DEFAULTS = { v: 3, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, ground: true, demo: false, proxy: '', fAir: [], fType: [], track: '', places: [] };
+  var DEFAULTS = { v: 3, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, ground: true, demo: false, proxy: '', fAir: [], fType: [], track: '', places: [], theme: 'classic' };
   // ICAO callsign prefix -> [name, IATA code]
   var AIRLINES = {
     BAW: ['British Airways', 'BA'], EZY: ['easyJet', 'U2'], EJU: ['easyJet Europe', 'EC'], EZS: ['easyJet Swiss', 'DS'],
@@ -211,6 +223,17 @@
   var NSEQ = SEQ.length, STEP = 55;                      // ms per flap
   var cellCur = new Uint8Array(COLS * ROWS), cellTgt = new Uint8Array(COLS * ROWS), cellStart = new Float64Array(COLS * ROWS);
   var sprites = [], spriteKey = '', rafId = 0, lastFrame = 0, flapBusy = false;
+  var THEMES = {
+    classic:   { name: 'Classic',       bg: '#060606', frame: '#141414', line: '#2a2a2a', t0: '#3b3b3d', t1: '#2c2c2e', t2: '#232325', t3: '#1b1b1c', txt: '#ebebeb', hinge: '#080808', cap: '#d6d6d6', acc: '#2bff4a', trk: '#ffb000', empty: '#151516' },
+    christmas: { name: 'Christmas',     bg: '#050d08', frame: '#0f2a18', line: '#b3202a', t0: '#2f6b3f', t1: '#235232', t2: '#1d4529', t3: '#143520', txt: '#fff4d6', hinge: '#07140b', cap: '#ff7b7b', acc: '#ffd34d', trk: '#ff5a5a', empty: '#10281a', lights: ['#ff3b3b', '#ffd34d', '#3dff7a', '#4da6ff'], snow: true },
+    airbus:    { name: 'Airbus',        bg: '#020a18', frame: '#06214a', line: '#00a3e0', t0: '#f4f9fd', t1: '#e4eff8', t2: '#d3e4f2', t3: '#c3d8ea', txt: '#00205b', hinge: '#7fa6c4', cap: '#7fd4ff', acc: '#00a3e0', trk: '#ffb000', empty: '#0a2a5a' },
+    boeing:    { name: 'Boeing',        bg: '#030814', frame: '#0b1b3d', line: '#3c6fcf', t0: '#2b4f9c', t1: '#1f3f82', t2: '#1a3570', t3: '#132a5a', txt: '#ffffff', hinge: '#0a1a3a', cap: '#9fc0ff', acc: '#7fd0ff', trk: '#ffb000', empty: '#0f2150' },
+    halloween: { name: 'Halloween',     bg: '#07030d', frame: '#150a24', line: '#ff7a00', t0: '#3a1d57', t1: '#2c1542', t2: '#25103a', t3: '#1a0a2a', txt: '#ff9a2e', hinge: '#0a0412', cap: '#b98cff', acc: '#ff7a00', trk: '#9dff3d', empty: '#170a26', lights: ['#ff7a00', '#a45cff', '#ff7a00', '#9dff3d'] },
+    amber:     { name: 'Retro amber',   bg: '#030200', frame: '#0b0803', line: '#4a3300', t0: '#1d1606', t1: '#171104', t2: '#120d03', t3: '#0d0a02', txt: '#ffb000', hinge: '#030200', cap: '#cc8a00', acc: '#ffb000', trk: '#ffe066', empty: '#0b0803' },
+    neon:      { name: 'Neon',          bg: '#04030c', frame: '#0b0a1f', line: '#ff2bd6', t0: '#1b1a3d', t1: '#14132f', t2: '#100f27', t3: '#0b0a1d', txt: '#00f0ff', hinge: '#04030c', cap: '#ff2bd6', acc: '#ff2bd6', trk: '#ffe600', empty: '#0b0a1f' },
+    light:     { name: 'Daylight',      bg: '#cfd4da', frame: '#e8ebee', line: '#9aa2ab', t0: '#ffffff', t1: '#f0f1f3', t2: '#e4e6e9', t3: '#d6d9dd', txt: '#1a1d21', hinge: '#9aa2ab', cap: '#3a4048', acc: '#00a844', trk: '#d96a00', empty: '#dcdfe3' }
+  };
+  var T = THEMES.classic, THEME_ORDER = ['classic', 'christmas', 'airbus', 'boeing', 'halloween', 'amber', 'neon', 'light'];
   var board = { iata: '', rt: null };
   var tileCache = {}, tileCount = 0, trail = [], trailKey = '', fix = null;
   var FLAPFONT = '"Roboto Condensed","Arial Narrow",Arial,sans-serif';
@@ -236,17 +259,17 @@
 
   function drawTile(x, w, h, ch, fs) {
     var pad = Math.max(1, Math.round(w * 0.03)), gr = x.createLinearGradient(0, 0, 0, h), rad = Math.max(2, w * 0.07);
-    x.fillStyle = '#0b0b0b'; x.fillRect(0, 0, w, h);
-    gr.addColorStop(0, '#3b3b3d'); gr.addColorStop(0.495, '#2c2c2e'); gr.addColorStop(0.505, '#232325'); gr.addColorStop(1, '#1b1b1c');
+    x.fillStyle = T.frame; x.fillRect(0, 0, w, h);
+    gr.addColorStop(0, T.t0); gr.addColorStop(0.495, T.t1); gr.addColorStop(0.505, T.t2); gr.addColorStop(1, T.t3);
     rr(x, pad, pad, w - 2 * pad, h - 2 * pad, rad); x.fillStyle = gr; x.fill();
-    x.strokeStyle = 'rgba(255,255,255,0.10)'; x.lineWidth = 1; rr(x, pad + 0.5, pad + 0.5, w - 2 * pad - 1, h - 2 * pad - 1, rad); x.stroke();
+    x.strokeStyle = T.light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.10)'; x.lineWidth = 1; rr(x, pad + 0.5, pad + 0.5, w - 2 * pad - 1, h - 2 * pad - 1, rad); x.stroke();
     if (ch !== ' ') {
-      x.fillStyle = '#ebebeb'; x.font = '600 ' + fs + 'px ' + FLAPFONT; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.fillStyle = T.txt; x.font = '600 ' + fs + 'px ' + FLAPFONT; x.textAlign = 'center'; x.textBaseline = 'middle';
       x.fillText(ch, w / 2, h / 2 + fs * 0.05);
     }
-    x.fillStyle = '#080808'; x.fillRect(pad, h / 2 - 1.5, w - 2 * pad, 3);               // hinge gap
-    x.fillStyle = 'rgba(255,255,255,0.12)'; x.fillRect(pad, h / 2 + 1.5, w - 2 * pad, 1);
-    x.fillStyle = '#050505';                                                              // hinge pins
+    x.fillStyle = T.hinge; x.fillRect(pad, h / 2 - 1.5, w - 2 * pad, 3);               // hinge gap
+    x.fillStyle = T.light ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.12)'; x.fillRect(pad, h / 2 + 1.5, w - 2 * pad, 1);
+    x.fillStyle = T.hinge;                                                              // hinge pins
     x.beginPath(); x.arc(pad + 1.5, h / 2, Math.max(1.5, w * 0.03), 0, 6.2832); x.arc(w - pad - 1.5, h / 2, Math.max(1.5, w * 0.03), 0, 6.2832); x.fill();
   }
   function buildSprites(g) {
@@ -478,7 +501,7 @@
     }
     strokePath(rest, 'rgba(236,242,246,0.92)', Math.max(1.6, lw * 0.8), [lw * 2.4, lw * 2.2]);   // still to fly: dashed
     strokePath(flown, '#000', lw + 3);                                                              // already flown: solid green
-    strokePath(flown, '#2bff4a', lw);
+    strokePath(flown, T.acc, lw);
     ctx.strokeStyle = '#37e3ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(home[0], home[1], Math.max(3, h * 0.02), 0, 6.2832); ctx.stroke();
     var oa = null, da = null;
     if (hasRoute) { oa = airport(org, codes[0]); da = airport(dst, codes[1]); }
@@ -495,7 +518,7 @@
       if (tag && clear) {
         ctx.font = '700 ' + Math.round(fs * 0.85) + 'px ' + FLAPFONT; ctx.textBaseline = 'middle'; ctx.textAlign = q[0] < X + w / 2 ? 'left' : 'right';
         ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(tag, q[0] + (q[0] < X + w / 2 ? 14 : -14), q[1] + fs * 0.9);
-        ctx.fillStyle = '#2bff4a'; ctx.fillText(tag, q[0] + (q[0] < X + w / 2 ? 14 : -14), q[1] + fs * 0.9);
+        ctx.fillStyle = T.acc; ctx.fillText(tag, q[0] + (q[0] < X + w / 2 ? 14 : -14), q[1] + fs * 0.9);
       }
     }
     ctx.font = Math.max(7, Math.round(h * 0.04)) + 'px Arial, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
@@ -515,28 +538,28 @@
       ctx.fillStyle = '#ececE6'; ctx.fill();
       ctx.fillStyle = '#1a1a1a'; ctx.font = '700 ' + Math.round(h * 0.32) + 'px ' + FLAPFONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(board.iata, X + w / 2, Y + h / 2);
-    } else { ctx.fillStyle = '#151516'; ctx.fill(); }
+    } else { ctx.fillStyle = T.empty; ctx.fill(); }
     ctx.restore();
   }
 
   // small spaced-out column heading
   function caption(str, X, Y, h, color) {
     var fs = Math.max(9, Math.round(h * 0.5)), i, x = X;
-    ctx.font = '600 ' + fs + 'px ' + FLAPFONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = color || '#d6d6d6';
+    ctx.font = '600 ' + fs + 'px ' + FLAPFONT; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = color || T.cap;
     for (i = 0; i < str.length; i++) { ctx.fillText(str.charAt(i), x, Y + h / 2); x += ctx.measureText(str.charAt(i)).width + fs * 0.16; }
   }
 
   function drawFlap(now) {
     var g = flapGeo(), pw = Math.round(g.cw * g.dpr), ph = Math.round(g.ch * g.dpr);
     if (canvas.width !== pw || canvas.height !== ph) { canvas.width = pw; canvas.height = ph; }
-    var key = g.w + 'x' + g.h + '@' + g.dpr;
+    var key = g.w + 'x' + g.h + '@' + g.dpr + T.name;
     if (key !== spriteKey) { buildSprites(g); spriteKey = key; }
     ctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0);
-    ctx.fillStyle = '#060606'; ctx.fillRect(0, 0, g.cw, g.ch);
+    ctx.fillStyle = T.bg; ctx.fillRect(0, 0, g.cw, g.ch);
     var bw = g.w * COLS;
-    rr(ctx, g.bx - 12, g.by - 12, bw + 24, g.bh + 24, 12); ctx.fillStyle = '#141414'; ctx.fill();
-    ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 2; ctx.stroke();
-    if (S.track) caption('TRACKING ' + S.track.toUpperCase(), g.bx + TEXTC0 * g.w + 4, g.by, g.cap, '#ffb000'); else caption('AIRLINE', g.bx + TEXTC0 * g.w + 4, g.by, g.cap);
+    rr(ctx, g.bx - 12, g.by - 12, bw + 24, g.bh + 24, 12); ctx.fillStyle = T.frame; ctx.fill();
+    ctx.strokeStyle = T.line; ctx.lineWidth = 2; ctx.stroke();
+    if (S.track) caption('TRACKING ' + S.track.toUpperCase(), g.bx + TEXTC0 * g.w + 4, g.by, g.cap, T.trk); else caption('AIRLINE', g.bx + TEXTC0 * g.w + 4, g.by, g.cap);
     var pn = curPlace();
     caption(pn ? 'MAP  ' + pn.name.toUpperCase().substr(0, 16) : 'LIVE MAP', g.bx + TEXTC1 * g.w + 4, g.by, g.cap);
     caption('CODE', g.bx + 4, rowY(g, 3) - g.cap, g.cap);
@@ -575,8 +598,8 @@
     if (board.rt && board.rt.pts && fix) {                         // flight progress bar
       var pp = planePos(now), d1 = hav(board.rt.pts[0][0], board.rt.pts[0][1], pp.lat, pp.lon), d2 = hav(pp.lat, pp.lon, board.rt.pts[1][0], board.rt.pts[1][1]);
       var fr = d1 + d2 > 0 ? Math.max(0, Math.min(1, d1 / (d1 + d2))) : 0, by2 = g.by + g.bh - 8;
-      ctx.fillStyle = '#10190f'; ctx.fillRect(g.bx, by2, bw, 6);
-      ctx.fillStyle = '#2bff4a'; ctx.fillRect(g.bx, by2, bw * fr, 6);
+      ctx.fillStyle = T.light ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.08)'; ctx.fillRect(g.bx, by2, bw, 6);
+      ctx.fillStyle = T.acc; ctx.fillRect(g.bx, by2, bw * fr, 6);
     }
     return busy;
   }
@@ -998,6 +1021,80 @@
     useLocation(p); $('ppanel').style.display = 'none';
   };
 
+  /* ---------- themes ---------- */
+  var deco = document.getElementById('deco'), dctx = deco.getContext('2d'), snow = [], decoId = 0, decoLast = 0, toastT = 0;
+  function swatchCss(t) { return 'linear-gradient(90deg,' + t.t0 + ' 0,' + t.t0 + ' 50%,' + t.line + ' 50%,' + t.line + ' 60%,' + t.txt + ' 60%,' + t.txt + ' 100%)'; }
+  function renderThemes() {
+    var el = $('themes'); el.innerHTML = '';
+    THEME_ORDER.forEach(function (id) {
+      var t = THEMES[id], b = document.createElement('div'), i = document.createElement('i');
+      b.className = 'sw' + (S.theme === id ? ' cur' : ''); i.style.background = swatchCss(t);
+      b.appendChild(i); b.appendChild(document.createTextNode(t.name));
+      b.onclick = function () { applyTheme(id, true); renderThemes(); };
+      el.appendChild(b);
+    });
+  }
+  function toast(t) {
+    var el = $('toast'); el.textContent = t; el.style.display = 'block'; clearTimeout(toastT);
+    toastT = setTimeout(function () { el.style.display = 'none'; }, 1600);
+  }
+  function applyTheme(id, persist) {
+    if (!THEMES[id]) id = 'classic';
+    S.theme = id; T = THEMES[id]; T.id = id; T.light = (id === 'light' || id === 'airbus') ? true : false;
+    if (persist) save();
+    var bt = document.getElementById('led').style; bt.background = T.bg;
+    document.body.style.background = T.bg;
+    snow = []; spriteKey = ''; redraw(); startLoop(); startDeco();
+  }
+  $('tbtn').onclick = function () {
+    var i = THEME_ORDER.indexOf(S.theme);
+    applyTheme(THEME_ORDER[(i + 1) % THEME_ORDER.length], true); toast(T.name);
+  };
+
+  // decorations (string lights, snow) live on their own canvas so they never slow the board down
+  function startDeco() { if (!decoId) decoId = requestAnimationFrame(decoFrame); }
+  function decoFrame() {
+    decoId = 0;
+    var now = performance.now();
+    if (!T.lights && !T.snow) { dctx.setTransform(1, 0, 0, 1, 0, 0); dctx.clearRect(0, 0, deco.width, deco.height); return; }
+    if (now - decoLast < 66) { decoId = requestAnimationFrame(decoFrame); return; }
+    var dt = Math.min(0.2, (now - decoLast) / 1000); decoLast = now;
+    var g = flapGeo(), pw = Math.round(g.cw * g.dpr), ph = Math.round(g.ch * g.dpr), i, p, n, x, y, bw = g.w * COLS;
+    if (deco.width !== pw || deco.height !== ph) { deco.width = pw; deco.height = ph; }
+    dctx.setTransform(g.dpr, 0, 0, g.dpr, 0, 0); dctx.clearRect(0, 0, g.cw, g.ch);
+    if (T.lights) {                                   // string of bulbs around the board frame
+      var L = g.bx - 12, Rr = g.bx + bw + 12, Tp = g.by - 12, B = g.by + g.bh + 12, sp = Math.max(26, Math.round(g.cw / 56)), r = Math.max(3, sp * 0.17), k = 0, cols = T.lights;
+      var path = [], px;
+      for (px = L; px <= Rr; px += sp) path.push([px, Tp]);
+      for (px = Tp + sp; px <= B; px += sp) path.push([Rr, px]);
+      for (px = Rr - sp; px >= L; px -= sp) path.push([px, B]);
+      for (px = B - sp; px > Tp; px -= sp) path.push([L, px]);
+      dctx.lineWidth = 1.5; dctx.strokeStyle = 'rgba(120,120,120,0.55)'; dctx.beginPath();
+      for (i = 0; i < path.length; i++) { if (i) dctx.lineTo(path[i][0], path[i][1]); else dctx.moveTo(path[i][0], path[i][1]); }
+      dctx.closePath(); dctx.stroke();
+      for (i = 0; i < path.length; i++) {
+        var on = (Math.floor(now / 650) + i) % 3 !== 0;
+        dctx.globalAlpha = on ? 1 : 0.35; dctx.fillStyle = cols[i % cols.length];
+        dctx.beginPath(); dctx.arc(path[i][0], path[i][1], r, 0, 6.2832); dctx.fill();
+        if (on) { dctx.globalAlpha = 0.18; dctx.beginPath(); dctx.arc(path[i][0], path[i][1], r * 2.2, 0, 6.2832); dctx.fill(); }
+      }
+      dctx.globalAlpha = 1;
+    }
+    if (T.snow) {
+      n = Math.max(30, Math.round(g.cw / 18));
+      while (snow.length < n) snow.push({ x: Math.random() * g.cw, y: Math.random() * g.ch, v: 25 + Math.random() * 45, r: 1.2 + Math.random() * 2.2, ph: Math.random() * 6.28 });
+      dctx.fillStyle = '#fff';
+      for (i = 0; i < snow.length; i++) {
+        p = snow[i]; p.y += p.v * dt; p.x += Math.sin(now / 1500 + p.ph) * 12 * dt;
+        if (p.y > g.ch + 4) { p.y = -4; p.x = Math.random() * g.cw; }
+        dctx.globalAlpha = 0.55 + p.r / 8; dctx.beginPath(); dctx.arc(p.x, p.y, p.r, 0, 6.2832); dctx.fill();
+      }
+      dctx.globalAlpha = 1;
+    }
+    decoId = requestAnimationFrame(decoFrame);
+  }
+  window.addEventListener('resize', function () { startDeco(); });
+
   /* ---------- settings UI ---------- */
   function fill() {
     $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km; $('proxy').value = S.proxy || '';
@@ -1054,7 +1151,7 @@
   window.addEventListener('resize', redraw);
 
   status = S.demo ? '' : 'Loading...';
-  keepAwake(); refreshButtons(); redraw(); poll();
+  keepAwake(); refreshButtons(); applyTheme(S.theme, false); renderThemes(); poll();
   setInterval(poll, 10000);
   setInterval(startLoop, 1000);   // map keeps moving between updates
   try { if (document.fonts && document.fonts.load) document.fonts.load('700 40px "Roboto Condensed"').then(function () { spriteKey = ''; startLoop(); }); } catch (e) {}
