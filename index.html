@@ -116,6 +116,15 @@
 <div id="panel">
   <div class="box">
     <h1>Flight Board settings</h1>
+    <label>Information on the board</label>
+    <div class="check"><input type="checkbox" id="sh_callsign"><span>Callsign</span></div>
+    <div class="check"><input type="checkbox" id="sh_reg"><span>Registration</span></div>
+    <div class="check"><input type="checkbox" id="sh_age"><span>Aircraft age (when Flightradar24 has it)</span></div>
+    <div class="check"><input type="checkbox" id="sh_route"><span>Departure and destination</span></div>
+    <div class="check"><input type="checkbox" id="sh_alt"><span>Altitude</span></div>
+    <div class="check"><input type="checkbox" id="sh_speed"><span>Speed</span></div>
+    <div class="check"><input type="checkbox" id="sh_hdg"><span>Heading</span></div>
+    <div style="font-size:12px;color:#777;margin:4px 0 8px">Airline, airline logo and aircraft model are always shown.</div>
     <label>Theme</label>
     <div class="themes" id="themes"></div>
     <div class="row">
@@ -139,13 +148,14 @@
       <button class="alt" id="close">Close</button>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:18px;font-size:12px;color:#666">Version 16</div>
+    <div style="margin-top:18px;font-size:12px;color:#666">Version 17</div>
   </div>
 </div>
 
 <script>
 (function () {
-  var DEFAULTS = { v: 3, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, ground: true, demo: false, proxy: '', fAir: [], fType: [], track: '', places: [], theme: 'classic' };
+  var DEFAULTS = { v: 3, lat: 51.5, lon: -0.12, km: 25, minAlt: 0, maxAlt: 60000, ground: true, demo: false, proxy: '', fAir: [], fType: [], track: '', places: [], theme: 'classic', show: {} };
+  var SHOW = { callsign: true, age: false, reg: true, route: true, speed: true, alt: true, hdg: false };
   // ICAO callsign prefix -> [name, IATA code]
   var AIRLINES = {
     BAW: ['British Airways', 'BA'], EZY: ['easyJet', 'U2'], EJU: ['easyJet Europe', 'EC'], EZS: ['easyJet Swiss', 'DS'],
@@ -167,6 +177,7 @@
 
   var S = load();
   var flights = [], inRadius = [], routes = {}, status = '', lastErr = '', logoImgs = {};
+  var ages = {};                         // aircraft age in years, per flight
   var rtTry = {};                        // when a route lookup was last tried, per flight
   var diag = { route: '', logo: '' };   // shown in the settings panel to help find problems
   var canvas = document.getElementById('led'), ctx = canvas.getContext('2d');
@@ -180,6 +191,9 @@
     if (!Array.isArray(s.fAir)) s.fAir = [];
     if (!Array.isArray(s.fType)) s.fType = [];
     if (typeof s.track !== 'string') s.track = '';
+    var sh = {}, q;
+    for (q in SHOW) sh[q] = (s.show && typeof s.show[q] === 'boolean') ? s.show[q] : SHOW[q];
+    s.show = sh;
     return s;
   }
   function save() { try { localStorage.setItem('flightboard', JSON.stringify(S)); } catch (e) {} }
@@ -216,7 +230,7 @@
   var COLS = 26, ROWS = 6, LOGOC = 4, MAPC = 6;
   var TEXTC0 = LOGOC, TEXTC1 = COLS - MAPC;
   // tile groups: [row, first column, last column]. Gaps between groups have no tiles.
-  var SEGS = [[0, 4, 19], [1, 4, 19], [2, 4, 19], [3, 0, 2], [3, 4, 25], [4, 0, 2], [4, 4, 25], [5, 0, 11], [5, 13, 22]];
+  var SEGS = [[0, 4, 19], [1, 4, 19], [2, 4, 19], [3, 0, 2], [3, 4, 25], [4, 0, 2], [4, 4, 25], [5, 0, 25]];
   var cellOn = new Uint8Array(COLS * ROWS);
   (function () { var k, c; for (k = 0; k < SEGS.length; k++) for (c = SEGS[k][1]; c <= SEGS[k][2]; c++) cellOn[SEGS[k][0] * COLS + c] = 1; })();
   var SEQ = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-/>:,'?";
@@ -287,24 +301,34 @@
 
   // text for each tile group, in the order of SEGS
   function boardData(f) {
-    var T = ['', '', '', '', '', '', '', '', ''], d = { texts: T, iata: '', rt: null };
+    var T = ['', '', '', '', '', '', '', '', ''], d = { texts: T, iata: '', rt: null }, sh = S.show;
     if (!f) { T[4] = centre(String(status || 'No flights nearby').toUpperCase(), 22); return d; }
     var cs = (f.callsign || f.reg || f.hex || '?').toUpperCase();
     var rt = routes[cs]; if (!rt || !rt.codes) rt = null;
     var al = AIRLINES[cs.substr(0, 3)] || (rt && rt.airline && rt.airline.name ? [rt.airline.name, rt.airline.iata || ''] : null);
-    var altT = f.alt === 'ground' ? 'ON GROUND' : (f.alt == null ? '---' : Math.round(f.alt) + ' FT');
-    var spdT = f.gs == null ? '---' : Math.round(f.gs) + ' KT';
-    var typeReg = [f.type, f.reg].filter(function (v) { return v; }).join(' ');
+    var gnd = f.alt === 'ground';
+    var altN = gnd ? 'GND' : (f.alt == null ? '---' : String(Math.round(f.alt)));
+    var spdN = f.gs == null ? '---' : String(Math.round(f.gs));
+    var hdgN = (typeof f.track !== 'number') ? '---' : ('00' + (Math.round(f.track) % 360)).slice(-3);
+    var items = [];                                   // data lines, in the order they appear
+    if (sh.alt) items.push({ k: 'ALT', short: altN, full: gnd ? 'ON GROUND' : (f.alt == null ? '---' : altN + ' FT') });
+    if (sh.speed) items.push({ k: 'SPD', short: spdN, full: f.gs == null ? '---' : spdN + ' KT' });
+    if (sh.hdg) items.push({ k: 'HDG', short: hdgN, full: hdgN === '---' ? '---' : hdgN + ' DEG' });
+    var line1 = [], age = ages[cs];
+    if (sh.callsign && al) line1.push(cs);
+    if (sh.age && typeof age === 'number') line1.push('AGE ' + age + 'Y');
     T[0] = clean(al ? al[0] : cs).toUpperCase();
-    T[1] = al ? cs : '';
-    T[2] = clean(typeReg).toUpperCase();
-    if (rt && rt.from && rt.to) {
-      var cd = rt.codes.split('-');
+    T[1] = line1.join(' ');
+    T[2] = clean([f.type, sh.reg ? f.reg : ''].filter(function (v) { return v; }).join(' ')).toUpperCase();
+    if (rt && rt.from && rt.to && sh.route) {
+      var cd = rt.codes.split('-'), n = items.length;
       T[3] = cd[0] || ''; T[4] = clean(rt.from).toUpperCase();
       T[5] = cd[1] || ''; T[6] = clean(rt.to).toUpperCase();
-      T[7] = 'ALT ' + altT.replace(' ', ''); T[8] = 'SPD ' + spdT.replace(' ', '');
+      T[7] = items.map(function (it) { return it.k + ' ' + (n > 2 ? it.short : (it.k === 'ALT' ? it.short + (gnd || f.alt == null ? '' : 'FT') : (it.k === 'HDG' ? it.full : it.full.replace(' ', '')))); }).join(n > 2 ? ' ' : '  ');
     } else {
-      T[3] = 'ALT'; T[4] = altT; T[5] = 'SPD'; T[6] = spdT; T[7] = f.dist.toFixed(1) + ' KM AWAY';
+      T[3] = items[0] ? items[0].k : ''; T[4] = items[0] ? items[0].full : '';
+      T[5] = items[1] ? items[1].k : ''; T[6] = items[1] ? items[1].full : '';
+      T[7] = [items[2] ? items[2].k + ' ' + (items[2].k === 'HDG' ? items[2].full : items[2].full.replace(' ', '')) : '', f.dist.toFixed(1) + ' KM AWAY'].filter(function (v) { return v; }).join('  ');
     }
     d.iata = al ? al[1] : ''; d.rt = rt;
     return d;
@@ -659,7 +683,7 @@
 
   function poll() {
     if (S.demo) {
-      routes.CPA251 = demoRoute; routes.BAW117 = demoRoute2;
+      routes.CPA251 = demoRoute; routes.BAW117 = demoRoute2; ages.CPA251 = 12; ages.BAW117 = 4;
       if (S.track) { demoTrack(); return; }
       inRadius = demoFlights();
       applyFilter(); return;
@@ -789,6 +813,8 @@
     }).then(function (d) {
       var o = d && d.airport && d.airport.origin, t = d && d.airport && d.airport.destination, al = (d && d.airline) || {};
       if (cur && cur.busy) cur.busy = false;
+      var ag = d && d.aircraft && d.aircraft.age, agn = typeof ag === 'number' ? ag : parseFloat(ag);
+      if (!isNaN(agn) && agn >= 0 && agn <= 70) { ages[key] = Math.round(agn); redraw(); }
       if (!o || !t || !o.code || !t.code) { diag.route = key + ': Flightradar24 has no route for this flight'; return; }
       var leg = pickLeg([
         { name: o.name, iata: o.code.iata || o.code.icao, lat: o.position && o.position.latitude, lon: o.position && o.position.longitude },
@@ -1100,7 +1126,12 @@
     $('lat').value = S.lat; $('lon').value = S.lon; $('km').value = S.km; $('proxy').value = S.proxy || '';
     $('minAlt').value = S.minAlt; $('maxAlt').value = S.maxAlt;
     $('ground').checked = S.ground; $('demo').checked = S.demo;
+    SHOWKEYS.forEach(function (k) { $('sh_' + k).checked = !!S.show[k]; });
   }
+  var SHOWKEYS = ['callsign', 'reg', 'age', 'route', 'alt', 'speed', 'hdg'];
+  SHOWKEYS.forEach(function (k) {
+    $('sh_' + k).onchange = function () { S.show[k] = $('sh_' + k).checked; save(); redraw(); };
+  });
   function msg(t) { $('msg').textContent = t; }
   $('gear').onclick = function () {
     fill();
